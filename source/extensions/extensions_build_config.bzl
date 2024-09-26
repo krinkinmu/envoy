@@ -226,6 +226,7 @@ EXTENSIONS = {
     "envoy.filters.network.wasm":                                 "//source/extensions/filters/network/wasm:config",
     "envoy.filters.network.zookeeper_proxy":                      "//source/extensions/filters/network/zookeeper_proxy:config",
     "envoy.filters.network.generic_proxy":                        "//source/extensions/filters/network/generic_proxy:config",
+    "envoy.filters.network.hyperlight":                           "//source/extensions/filters/network/hyperlight:config",
 
     #
     # UDP filters
