@@ -1,6 +1,7 @@
 load("@com_google_googleapis//:repository_rules.bzl", "switched_rules_by_language")
 load("@envoy_api//bazel:envoy_http_archive.bzl", "envoy_http_archive")
 load("@envoy_api//bazel:external_deps.bzl", "load_repository_locations")
+load(":local_repository.bzl", "envoy_new_local_repository")
 load(":dev_binding.bzl", "envoy_dev_binding")
 load(":repository_locations.bzl", "PROTOC_VERSIONS", "REPOSITORY_LOCATIONS_SPEC")
 
@@ -103,6 +104,13 @@ def _rust_deps():
     external_http_archive(
         "rules_rust",
         patches = ["@envoy//bazel:rules_rust.patch"],
+    )
+
+def _hyperlight_wasm():
+    envoy_new_local_repository(
+        name = "com_github_hyperlight",
+	build_file = "@envoy//bazel/external:hyperlight.BUILD",
+	path = "../hyperlight"
     )
 
 def envoy_dependencies(skip_targets = []):
@@ -233,6 +241,8 @@ def envoy_dependencies(skip_targets = []):
     _com_github_wamr()
     _com_github_wasmtime()
     _com_github_wasm_c_api()
+
+    _hyperlight_wasm()
 
     switched_rules_by_language(
         name = "com_google_googleapis_imports",
