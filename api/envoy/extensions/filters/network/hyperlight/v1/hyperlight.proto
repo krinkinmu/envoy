@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package envoy.extensions.filters.network.hyperlight.v1;
+
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.extensions.filters.network.hyperlight.v1";
+option java_outer_classname = "HyperlightProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/hyperlight/v1;hyperlightv1";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+message Hyperlight {
+  string module_path = 1 [(validate.rules).string = {min_len: 1}];
+}
