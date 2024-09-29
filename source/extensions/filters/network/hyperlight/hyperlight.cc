@@ -298,6 +298,8 @@ Network::FilterStatus HyperlightFilter::onData(Buffer::Instance& buf, bool) {
         break;
       }
     }
+
+    buf.drain(buf.length());
     ENVOY_LOG(info, "hyperlight filter finished work with status {}", status);
   }
   return Network::FilterStatus::StopIteration;
