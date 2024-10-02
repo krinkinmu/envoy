@@ -6,7 +6,13 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "hyperlight_lib",
-    srcs = [
-        ":target/debug/libhyperlight.a",
-    ],
+    srcs = select({
+        ":opt-build": [":target/release/libhyperlight.a"],
+        "//conditions:default": [":target/debug/libhyperlight.a"],
+    }),
+)
+
+config_setting(
+    name = "opt-build",
+    values = {"compilation_mode": "opt"},
 )
