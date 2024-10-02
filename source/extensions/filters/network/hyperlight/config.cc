@@ -8,7 +8,6 @@
 #include "source/extensions/filters/network/common/factory_base.h"
 #include "source/extensions/filters/network/hyperlight/hyperlight.h"
 
-
 namespace Envoy {
 namespace Extensions {
 namespace NetworkFilters {
@@ -17,14 +16,13 @@ namespace Hyperlight {
 using ::Envoy::Extensions::Common::Hyperlight::is_hypervisor_present;
 
 class HyperlightConfigFactory
-    : public Common::FactoryBase<envoy::extensions::filters::network::hyperlight::v1::Hyperlight>
-    , Logger::Loggable<Logger::Id::filter> {
+    : public Common::FactoryBase<envoy::extensions::filters::network::hyperlight::v1::Hyperlight>,
+      Logger::Loggable<Logger::Id::filter> {
 public:
   HyperlightConfigFactory() : FactoryBase("envoy.filters.network.hyperlight") {}
 
 private:
-  Network::FilterFactoryCb
-  createFilterFactoryFromProtoTyped(
+  Network::FilterFactoryCb createFilterFactoryFromProtoTyped(
       const envoy::extensions::filters::network::hyperlight::v1::Hyperlight& config,
       Server::Configuration::FactoryContext&) override {
     if (!is_hypervisor_present()) {
@@ -37,17 +35,17 @@ private:
       auto status = filter->setupSandbox(module_path);
       if (!status.ok()) {
         // I think that this lambda will be called in data path.
-	// We are not allowed to throw exceptions in the data path
-	// and we don't have any other ways to report an error.
-	// So we log and fail open, e.g. we just skip this filter.
-	// There are examples of other filters doing a similar thing.
-	//
-	// NOTE: Strictly speaking we report this filter as terminating
-	// so it has to be the last filter in the chain and consume all
-	// the data. So maybe a slightly better option here is to create
-	// a simple filter that just silently eats the data.
+        // We are not allowed to throw exceptions in the data path
+        // and we don't have any other ways to report an error.
+        // So we log and fail open, e.g. we just skip this filter.
+        // There are examples of other filters doing a similar thing.
+        //
+        // NOTE: Strictly speaking we report this filter as terminating
+        // so it has to be the last filter in the chain and consume all
+        // the data. So maybe a slightly better option here is to create
+        // a simple filter that just silently eats the data.
         ENVOY_LOG(error, "failed to setup hyperlight WASM sandbox", status);
-	return;
+        return;
       }
       filter_manager.addReadFilter(std::move(filter));
     };

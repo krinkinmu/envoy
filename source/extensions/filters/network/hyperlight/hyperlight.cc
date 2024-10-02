@@ -14,7 +14,7 @@
 //    as far as I understand, stay with the thread - so a lot of
 //    processing related to the same connection in Envoy stays in
 //    the same thread - on the flip side, many data structures in
-//    Envoy are not protected to be accessed concurrently from 
+//    Envoy are not protected to be accessed concurrently from
 //    multiple threads;
 // 3. The same thread can handle multiple connections at the same
 //    time switching between them, one processing on one of the
@@ -163,9 +163,7 @@ namespace Extensions {
 namespace NetworkFilters {
 namespace Hyperlight {
 
-HyperlightFilter::HyperlightFilter()
-  : guest_dispatcher_([this]() { guestCallDispatchLoop(); })
-{}
+HyperlightFilter::HyperlightFilter() : guest_dispatcher_([this]() { guestCallDispatchLoop(); }) {}
 
 HyperlightFilter::~HyperlightFilter() {
   {
@@ -189,9 +187,7 @@ void HyperlightFilter::guestCallDispatchLoop() {
       //    thread needs to do will be put in the guest_call_
       //    queue, so we are checking if the queue has
       //    something.
-      cond_.wait(lock, [this]() -> bool {
-        return guest_done_ || !guest_calls_.empty();
-      });
+      cond_.wait(lock, [this]() -> bool { return guest_done_ || !guest_calls_.empty(); });
     }
 
     bool had_work = false;
@@ -202,16 +198,16 @@ void HyperlightFilter::guestCallDispatchLoop() {
       had_work = !guest_calls_.empty();
       while (!guest_calls_.empty()) {
         auto call = guest_calls_.front();
-	lock.unlock();
+        lock.unlock();
 
-	// We can't hold the mutex while we are calling into
-	// hyperlight. The WASM module that hyperlight
-	// executes may call back into Envoy and if we hold
-	// a mutex here it will result in a deadlock.
-	call();
+        // We can't hold the mutex while we are calling into
+        // hyperlight. The WASM module that hyperlight
+        // executes may call back into Envoy and if we hold
+        // a mutex here it will result in a deadlock.
+        call();
 
-	lock.lock();
-	guest_calls_.pop();
+        lock.lock();
+        guest_calls_.pop();
       }
       exit = guest_done_;
     }
@@ -236,7 +232,7 @@ Network::FilterStatus HyperlightFilter::onData(Buffer::Instance& buf, bool) {
     // exposing it to the WASM, I'm cutting a corner here and copy
     // the data, so I can give to WASM a contigous array of data.
     std::vector<uint8_t> copy(buf.length(), 0);
-    buf.copyOut(0, buf.length(), static_cast<void *>(copy.data()));
+    buf.copyOut(0, buf.length(), static_cast<void*>(copy.data()));
     absl::Span<uint8_t> data(copy);
     int32_t status;
 
@@ -248,27 +244,23 @@ Network::FilterStatus HyperlightFilter::onData(Buffer::Instance& buf, bool) {
     // at the top of the file.
     {
       std::unique_lock<std::mutex> lock(mux_);
-      guest_calls_.push([this, &status, data]() {
-        status = sandbox_->run(data);
-      });
+      guest_calls_.push([this, &status, data]() { status = sandbox_->run(data); });
     }
     cond_.notify_all();
 
     while (true) {
       {
         std::unique_lock<std::mutex> lock(mux_);
-	// We wait for at least one of the following to happen:
-	// 1. WASM in hyperlight finished executing the task we
-	//    gave it above - in this case the task will be
-	//    removed from the guest_calls_ queue.
-	// 2. WASM in hyperlight called the host to do something
-	//    - in this case the tasks it wants us to do will be
-	//    in the host_calls_ queue and it will not be empty.
-	cond_.wait(lock, [this]() -> bool {
-	  return !host_calls_.empty() || guest_calls_.empty();
-	});
+        // We wait for at least one of the following to happen:
+        // 1. WASM in hyperlight finished executing the task we
+        //    gave it above - in this case the task will be
+        //    removed from the guest_calls_ queue.
+        // 2. WASM in hyperlight called the host to do something
+        //    - in this case the tasks it wants us to do will be
+        //    in the host_calls_ queue and it will not be empty.
+        cond_.wait(lock, [this]() -> bool { return !host_calls_.empty() || guest_calls_.empty(); });
       }
-      
+
       bool had_work = false;
       bool exit = false;
 
@@ -326,17 +318,13 @@ absl::Status HyperlightFilter::setupSandbox(const std::string& module_path) {
   builder->setModulePath(module_path_);
   builder->registerFunction("write", [this](absl::Span<uint8_t> data) -> int32_t {
     std::unique_lock<std::mutex> lock(mux_);
-    host_calls_.push([this, data]() {
-      write(data);
-    });
+    host_calls_.push([this, data]() { write(data); });
     lock.unlock();
-    
+
     cond_.notify_all();
 
     lock.lock();
-    cond_.wait(lock, [this]() -> bool {
-      return host_calls_.empty();
-    });
+    cond_.wait(lock, [this]() -> bool { return host_calls_.empty(); });
     return 0;
   });
 

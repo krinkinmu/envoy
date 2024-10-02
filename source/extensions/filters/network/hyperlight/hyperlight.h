@@ -9,19 +9,21 @@
 #include <string>
 #include <thread>
 
-#include "absl/status/status.h"
-#include "absl/types/span.h"
 #include "envoy/network/filter.h"
+
 #include "source/common/common/logger.h"
 #include "source/extensions/common/hyperlight/hyperlight.h"
+
+#include "absl/status/status.h"
+#include "absl/types/span.h"
 
 namespace Envoy {
 namespace Extensions {
 namespace NetworkFilters {
 namespace Hyperlight {
 
-using ::Envoy::Extensions::Common::Hyperlight::Sandbox;
 using ::Envoy::Extensions::Common::Hyperlight::Builder;
+using ::Envoy::Extensions::Common::Hyperlight::Sandbox;
 
 class HyperlightFilter : public Network::ReadFilter, Logger::Loggable<Logger::Id::filter> {
 public:

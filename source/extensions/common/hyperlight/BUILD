@@ -24,7 +24,7 @@ envoy_cc_library(
     hdrs = ["hyperlight.h"],
     deps = [
         "@com_google_absl//absl/status:statusor",
-    ]
+    ],
 )
 
 envoy_cc_extension(
@@ -34,8 +34,8 @@ envoy_cc_extension(
         "//source/extensions:__subpackages__",
     ],
     deps = [
+        ":hyperlight_c_api",
         ":hyperlight_headers",
-	":hyperlight_c_api",
         "@com_google_absl//absl/status",
     ],
 )
