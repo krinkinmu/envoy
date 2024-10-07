@@ -1123,6 +1123,11 @@ const Network::Connection* Context::getConnection() const {
   return nullptr;
 }
 
+Network::Connection* Context::getConnection() {
+  return const_cast<Network::Connection*>(
+      const_cast<const Context*>(this)->getConnection());
+}
+
 WasmResult Context::setProperty(std::string_view path, std::string_view value) {
   auto* stream_info = getRequestStreamInfo();
   if (!stream_info) {

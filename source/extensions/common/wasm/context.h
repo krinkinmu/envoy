@@ -140,6 +140,7 @@ public:
   // callback. As long as any one of the callbacks is invoked, the value should be
   // available.
   const Network::Connection* getConnection() const;
+  Network::Connection* getConnection();
 
   //
   // VM level down-calls into the Wasm code on Context(id == 0).

@@ -115,3 +115,15 @@ cc_proto_library(
     name = "set_envoy_filter_state_cc_proto",
     deps = [":set_envoy_filter_state_proto"],
 )
+
+proto_library(
+    name = "respond_proto",
+    srcs = ["respond.proto"],
+)
+
+# NB: this target is compiled to native code and to Wasm. Hence the generic rule.
+cc_proto_library(
+    name = "respond_cc_proto",
+    deps = [":respond_proto"],
+)
+

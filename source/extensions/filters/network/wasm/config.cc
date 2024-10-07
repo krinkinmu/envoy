@@ -27,6 +27,12 @@ Network::FilterFactoryCb WasmFilterConfig::createFilterFactoryFromProtoTyped(
   };
 }
 
+bool WasmFilterConfig::isTerminalFilterByProtoTyped(
+    const envoy::extensions::filters::network::wasm::v3::Wasm& proto_config,
+    Server::Configuration::ServerFactoryContext&) {
+  return proto_config.terminal();
+}
+
 /**
  * Static registration for the Wasm filter. @see RegisterFactory.
  */

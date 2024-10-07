@@ -1,7 +1,9 @@
+#include "source/common/buffer/buffer_impl.h"
 #include "source/common/common/logger.h"
 #include "source/extensions/common/wasm/ext/declare_property.pb.h"
 #include "source/extensions/common/wasm/ext/set_envoy_filter_state.pb.h"
 #include "source/extensions/common/wasm/ext/verify_signature.pb.h"
+#include "source/extensions/common/wasm/ext/respond.pb.h"
 #include "source/extensions/common/wasm/wasm.h"
 
 #if defined(WASM_USE_CEL_PARSER)
@@ -122,6 +124,23 @@ RegisterForeignFunction registerSetEnvoyFilterStateForeignFunction(
         auto context = static_cast<Context*>(proxy_wasm::current_context_);
         return context->setEnvoyFilterState(args.path(), args.value(),
                                             toFilterStateLifeSpan(args.span()));
+      }
+      return WasmResult::BadArgument;
+    });
+
+RegisterForeignFunction registerRespondForeignFunction(
+    "respond",
+    [](WasmBase&, std::string_view arguments,
+       const std::function<void*(size_t size)>&) -> WasmResult {
+      envoy::source::extensions::common::wasm::RespondArguments args;
+      if (args.ParseFromArray(arguments.data(), arguments.size())) {
+        auto context = static_cast<Context*>(proxy_wasm::current_context_);
+        ::Envoy::Buffer::OwnedImpl data{std::string_view(args.data())};
+        Network::Connection *c = context->getConnection();
+        if (c != nullptr) {
+          c->write(data, false);
+          return WasmResult::Ok;
+        }
       }
       return WasmResult::BadArgument;
     });
