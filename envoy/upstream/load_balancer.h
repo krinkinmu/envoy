@@ -10,7 +10,14 @@
 #include "envoy/upstream/types.h"
 #include "envoy/upstream/upstream.h"
 
+#include "xds/data/orca/v3/orca_load_report.pb.h"
+
 namespace Envoy {
+namespace Server {
+namespace Configuration {
+class ServerFactoryContext;
+} // namespace Configuration
+} // namespace Server
 namespace Http {
 namespace ConnectionPool {
 class ConnectionLifetimeCallbacks;
@@ -96,13 +103,36 @@ public:
    */
   virtual Network::TransportSocketOptionsConstSharedPtr upstreamTransportSocketOptions() const PURE;
 
-  using OverrideHost = absl::string_view;
+  using OverrideHost = std::pair<absl::string_view, bool>;
   /**
    * Returns the host the load balancer should select directly. If the expected host exists and
    * the host can be selected directly, the load balancer can bypass the load balancing algorithm
    * and return the corresponding host directly.
    */
   virtual absl::optional<OverrideHost> overrideHostToSelect() const PURE;
+
+  // Interface for callbacks when ORCA load reports are received from upstream.
+  class OrcaLoadReportCallbacks {
+  public:
+    virtual ~OrcaLoadReportCallbacks() = default;
+    /**
+     * Invoked when a new orca report is received for this LB context.
+     * @param orca_load_report supplies the ORCA load report.
+     * @param host supplies the upstream host, which provided the load report.
+     * @return absl::Status the result of ORCA load report processing by the load balancer.
+     */
+    virtual absl::Status
+    onOrcaLoadReport(const xds::data::orca::v3::OrcaLoadReport& orca_load_report,
+                     const HostDescription& host) PURE;
+  };
+
+  /**
+   * Install a callback to be invoked when ORCA Load report is received for this
+   * LB context.
+   * Note: LB Context keeps a weak pointer to `callbacks` and doesn't invoke the callback
+   * if it is `expired()`.
+   */
+  virtual void setOrcaLoadReportCallbacks(std::weak_ptr<OrcaLoadReportCallbacks> callbacks) PURE;
 };
 
 /**
@@ -229,7 +259,7 @@ public:
    * instantiate any needed structured and prepare for further updates. The cluster manager
    * will do this at the appropriate time.
    */
-  virtual void initialize() PURE;
+  virtual absl::Status initialize() PURE;
 };
 
 using ThreadAwareLoadBalancerPtr = std::unique_ptr<ThreadAwareLoadBalancer>;
@@ -273,40 +303,13 @@ public:
    *
    * @return LoadBalancerConfigPtr a new load balancer config.
    *
+   * @param factory_context supplies the load balancer factory context.
    * @param config supplies the typed proto config of the load balancer. A dynamic_cast could
    *        be performed on the config to the expected proto type.
-   * @param visitor supplies the validation visitor that will be used to validate the embedded
-   *        Any proto message.
    */
-  virtual LoadBalancerConfigPtr loadConfig(const Protobuf::Message& config,
-                                           ProtobufMessage::ValidationVisitor& visitor) PURE;
-
-  std::string category() const override { return "envoy.load_balancing_policies"; }
-};
-
-/**
- * Factory config for non-thread-aware load balancers. To support a load balancing policy of
- * LOAD_BALANCING_POLICY_CONFIG, at least one load balancer factory corresponding to a policy in
- * load_balancing_policy must be registered with Envoy. Envoy will use the first policy for which
- * it has a registered factory.
- */
-class NonThreadAwareLoadBalancerFactory : public Config::UntypedFactory {
-public:
-  ~NonThreadAwareLoadBalancerFactory() override = default;
-
-  /**
-   * @return LoadBalancerPtr a new non-thread-aware load balancer.
-   *
-   * @param cluster_info supplies the cluster info.
-   * @param priority_set supplies the priority set.
-   * @param local_priority_set supplies the local priority set.
-   * @param runtime supplies the runtime loader.
-   * @param random supplies the random generator.
-   * @param time_source supplies the time source.
-   */
-  virtual LoadBalancerPtr create(const ClusterInfo& cluster_info, const PrioritySet& priority_set,
-                                 const PrioritySet* local_priority_set, Runtime::Loader& runtime,
-                                 Random::RandomGenerator& random, TimeSource& time_source) PURE;
+  virtual LoadBalancerConfigPtr
+  loadConfig(Server::Configuration::ServerFactoryContext& factory_context,
+             const Protobuf::Message& config) PURE;
 
   std::string category() const override { return "envoy.load_balancing_policies"; }
 };

@@ -32,10 +32,11 @@ public:
    * @param completion supplies the completion to call when the listener has been added (or not) on
    *                   the worker.
    * @param runtime, supplies the runtime for the server
+   * @param random, supplies a random number generator
    */
   virtual void addListener(absl::optional<uint64_t> overridden_listener,
                            Network::ListenerConfig& listener, AddListenerCompletion completion,
-                           Runtime::Loader& runtime) PURE;
+                           Runtime::Loader& runtime, Random::RandomGenerator& random) PURE;
 
   /**
    * @return uint64_t the number of connections across all listeners that the worker owns.
@@ -44,10 +45,10 @@ public:
 
   /**
    * Start the worker thread.
-   * @param guard_dog supplies the guard dog to use for thread watching.
+   * @param guard_dog supplies the optional guard dog to use for thread watching.
    * @param cb a callback to run when the worker thread starts running.
    */
-  virtual void start(GuardDog& guard_dog, const std::function<void()>& cb) PURE;
+  virtual void start(OptRef<GuardDog> guard_dog, const std::function<void()>& cb) PURE;
 
   /**
    * Initialize stats for this worker's dispatcher, if available. The worker will output
@@ -106,10 +107,13 @@ public:
   /**
    * @param index supplies the index of the worker, in the range of [0, concurrency).
    * @param overload_manager supplies the server's overload manager.
+   * @param null_overload_manager supplies the server's null overload manager for conditions where
+   * overload manager is disabled.
    * @param worker_name supplies the name of the worker, used for per-worker stats.
    * @return WorkerPtr a new worker.
    */
   virtual WorkerPtr createWorker(uint32_t index, OverloadManager& overload_manager,
+                                 OverloadManager& null_overload_manager,
                                  const std::string& worker_name) PURE;
 };
 

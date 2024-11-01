@@ -1,5 +1,6 @@
-#!/bin/bash -eu
+#!/usr/bin/env bash
 
+set -eu
 set -o pipefail
 
 # REQUIRES DOCKER!
@@ -15,7 +16,7 @@ fi
 ARCH=x86_64
 HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
-PYTHON_VERSION=3.11
+PYTHON_VERSION=3.12
 
 docker run --rm \
        -v "$PWD/tools/gsutil/crcmod:/output" \

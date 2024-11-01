@@ -26,15 +26,35 @@ namespace Http {
 namespace Udp {
 
 void UdpConnPool::newStream(Router::GenericConnectionPoolCallbacks* callbacks) {
-  Router::UpstreamToDownstream& upstream_to_downstream = callbacks->upstreamToDownstream();
-  Network::SocketPtr socket = createSocket(host_);
+  Envoy::Network::SocketPtr socket = createSocket(host_);
+  auto source_address_selector = host_->cluster().getUpstreamLocalAddressSelector();
+  auto upstream_local_address = source_address_selector->getUpstreamLocalAddress(
+      host_->address(), /*socket_options=*/nullptr);
+  if (!Envoy::Network::Socket::applyOptions(upstream_local_address.socket_options_, *socket,
+                                            envoy::config::core::v3::SocketOption::STATE_PREBIND)) {
+    callbacks->onPoolFailure(ConnectionPool::PoolFailureReason::LocalConnectionFailure,
+                             "Failed to apply socket option for UDP upstream", host_);
+    return;
+  }
+  if (upstream_local_address.address_) {
+    Envoy::Api::SysCallIntResult bind_result = socket->bind(upstream_local_address.address_);
+    if (bind_result.return_value_ < 0) {
+      callbacks->onPoolFailure(ConnectionPool::PoolFailureReason::LocalConnectionFailure,
+                               "Failed to bind for UDP upstream", host_);
+      return;
+    }
+  }
+
   const Network::ConnectionInfoProvider& connection_info_provider =
       socket->connectionInfoProvider();
+  Router::UpstreamToDownstream& upstream_to_downstream = callbacks->upstreamToDownstream();
   ASSERT(upstream_to_downstream.connection().has_value());
   Event::Dispatcher& dispatcher = upstream_to_downstream.connection()->dispatcher();
   auto upstream =
       std::make_unique<UdpUpstream>(&upstream_to_downstream, std::move(socket), host_, dispatcher);
-  StreamInfo::StreamInfoImpl stream_info(dispatcher.timeSource(), nullptr);
+  StreamInfo::StreamInfoImpl stream_info(dispatcher.timeSource(), nullptr,
+                                         StreamInfo::FilterState::LifeSpan::Connection);
+
   callbacks->onPoolReady(std::move(upstream), host_, connection_info_provider, stream_info, {});
 }
 
@@ -44,8 +64,12 @@ UdpUpstream::UdpUpstream(Router::UpstreamToDownstream* upstream_to_downstream,
     : upstream_to_downstream_(upstream_to_downstream), socket_(std::move(socket)), host_(host),
       dispatcher_(dispatcher) {
   socket_->ioHandle().initializeFileEvent(
-      dispatcher_, [this](uint32_t) { onSocketReadReady(); }, Event::PlatformDefaultTriggerType,
-      Event::FileReadyType::Read);
+      dispatcher_,
+      [this](uint32_t) {
+        onSocketReadReady();
+        return absl::OkStatus();
+      },
+      Event::PlatformDefaultTriggerType, Event::FileReadyType::Read);
 }
 
 void UdpUpstream::encodeData(Buffer::Instance& data, bool end_stream) {
@@ -94,7 +118,7 @@ void UdpUpstream::onSocketReadReady() {
   uint32_t packets_dropped = 0;
   const Api::IoErrorPtr result = Network::Utility::readPacketsFromSocket(
       socket_->ioHandle(), *socket_->connectionInfoProvider().localAddress(), *this,
-      dispatcher_.timeSource(), /*prefer_gro=*/true, packets_dropped);
+      dispatcher_.timeSource(), /*allow_gro=*/true, /*allow_mmsg=*/true, packets_dropped);
   if (result == nullptr) {
     socket_->ioHandle().activateFileEvents(Event::FileReadyType::Read);
     return;
@@ -105,7 +129,8 @@ void UdpUpstream::onSocketReadReady() {
 // connected to the upstream server in the encodeHeaders method.
 void UdpUpstream::processPacket(Network::Address::InstanceConstSharedPtr /*local_address*/,
                                 Network::Address::InstanceConstSharedPtr /*peer_address*/,
-                                Buffer::InstancePtr buffer, MonotonicTime /*receive_time*/) {
+                                Buffer::InstancePtr buffer, MonotonicTime /*receive_time*/,
+                                uint8_t /*tos*/, Buffer::RawSlice /*saved_cmsg*/) {
   std::string data = buffer->toString();
   quiche::ConnectUdpDatagramUdpPacketPayload payload(data);
   quiche::QuicheBuffer serialized_capsule =

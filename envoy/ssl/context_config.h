@@ -81,7 +81,7 @@ public:
    * are downloaded from SDS server, this callback is invoked to update SSL context.
    * @param callback callback that is executed by context config.
    */
-  virtual void setSecretUpdateCallback(std::function<void()> callback) PURE;
+  virtual void setSecretUpdateCallback(std::function<absl::Status()> callback) PURE;
 
   /**
    * @return a callback which can be used to create Handshaker instances.
@@ -199,6 +199,16 @@ public:
    * downstream TLS handshake, false otherwise.
    */
   virtual bool fullScanCertsOnSNIMismatch() const PURE;
+
+  /**
+   * @return true if the client cipher preference is enabled, false otherwise.
+   */
+  virtual bool preferClientCiphers() const PURE;
+
+  /**
+   * @return a factory which can be used to create TLS context provider instances.
+   */
+  virtual TlsCertificateSelectorFactory tlsCertificateSelectorFactory() const PURE;
 };
 
 using ServerContextConfigPtr = std::unique_ptr<ServerContextConfig>;

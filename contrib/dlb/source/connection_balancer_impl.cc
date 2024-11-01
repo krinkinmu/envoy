@@ -40,14 +40,14 @@ DlbConnectionBalanceFactory::createConnectionBalancerFromProto(
   const auto& typed_config =
       dynamic_cast<const envoy::config::core::v3::TypedExtensionConfig&>(config);
   envoy::extensions::network::connection_balance::dlb::v3alpha::Dlb dlb_config;
-  auto status = Envoy::MessageUtil::unpackToNoThrow(typed_config.typed_config(), dlb_config);
+  auto status = Envoy::MessageUtil::unpackTo(typed_config.typed_config(), dlb_config);
   if (!status.ok()) {
     return fallback(fmt::format("unexpected dlb config: {}", typed_config.DebugString()));
   }
 
   fallback_policy = dlb_config.fallback_policy();
 
-  const uint32_t worker_num = context.options().concurrency();
+  const uint32_t worker_num = context.serverFactoryContext().options().concurrency();
 
   if (worker_num > 32) {
     return fallback("Dlb connection balanncer only supports up to 32 worker threads, "
@@ -234,8 +234,11 @@ void DlbBalancedConnectionHandlerImpl::setDlbEvent() {
 
   dlb_event_ = listener->dispatcher().createFileEvent(
       DlbConnectionBalanceFactorySingleton::get().efds[index_],
-      [this](uint32_t events) -> void { onDlbEvents(events); }, Event::FileTriggerType::Level,
-      Event::FileReadyType::Read);
+      [this](uint32_t events) {
+        onDlbEvents(events);
+        return absl::OkStatus();
+      },
+      Event::FileTriggerType::Level, Event::FileReadyType::Read);
   dlb_event_->setEnabled(Event::FileReadyType::Read);
 }
 

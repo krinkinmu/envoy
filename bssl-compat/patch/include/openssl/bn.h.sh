@@ -13,6 +13,7 @@ uncomment.sh "$1" --comment -h \
   --uncomment-func-decl BN_dup \
   --uncomment-func-decl BN_num_bits \
   --uncomment-func-decl BN_set_word \
+  --uncomment-func-decl BN_bn2dec \
   --uncomment-func-decl BN_bn2hex \
   --uncomment-func-decl BN_hex2bn \
   --uncomment-func-decl BN_add_word \

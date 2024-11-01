@@ -14,6 +14,7 @@ envoy_cc_library(
     deps = [
         ":filter_state_lib",
         ":stream_id_provider_lib",
+        ":utility_lib",
         "//envoy/http:request_id_extension_interface",
         "//envoy/stream_info:stream_info_interface",
         "//source/common/common:assert_lib",
@@ -37,13 +38,14 @@ envoy_cc_library(
     name = "utility_lib",
     srcs = ["utility.cc"],
     hdrs = ["utility.h"],
-    external_deps = ["abseil_optional"],
     deps = [
         "//envoy/common:time_interface",
         "//envoy/http:codes_interface",
         "//envoy/stream_info:stream_info_interface",
         "//source/common/http:default_server_string_lib",
         "//source/common/runtime:runtime_features_lib",
+        "@com_google_absl//absl/container:node_hash_map",
+        "@com_google_absl//absl/types:optional",
         "@envoy_api//envoy/extensions/filters/network/http_connection_manager/v3:pkg_cc_proto",
     ],
 )

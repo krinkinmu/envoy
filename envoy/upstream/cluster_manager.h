@@ -38,6 +38,14 @@
 #include "absl/container/node_hash_map.h"
 
 namespace Envoy {
+
+namespace Quic {
+
+class EnvoyQuicNetworkObserverRegistryFactory;
+class EnvoyQuicNetworkObserverRegistry;
+
+} // namespace Quic
+
 namespace Upstream {
 
 /**
@@ -214,6 +222,21 @@ public:
 
   virtual ~ClusterManager() = default;
 
+  // API to initialize the ClusterManagerImpl instance based on the given Bootstrap config.
+  //
+  // This method *must* be called prior to invoking any other methods on the class and *must* only
+  // be called once. This method should be called immediately after ClusterManagerImpl construction
+  // and from the same thread in which the ClusterManagerImpl was constructed.
+  //
+  // The initialization is separated from the constructor because lots of work, including ADS
+  // initialization, is done in this method. If the contents of this method are invoked during
+  // construction, a derived class cannot override any of the virtual methods and have them invoked
+  // instead, since the base class's methods are used when in a base class constructor.
+  virtual absl::Status initialize(const envoy::config::bootstrap::v3::Bootstrap& bootstrap) PURE;
+
+  // API to return whether the ClusterManagerImpl instance is initialized.
+  virtual bool initialized() PURE;
+
   /**
    * Add or update a cluster via API. The semantics of this API are:
    * 1) The hash of the config is used to determine if an already existing cluster has changed.
@@ -222,10 +245,15 @@ public:
    *
    * @param cluster supplies the cluster configuration.
    * @param version_info supplies the xDS version of the cluster.
+   * @param avoid_cds_removal If set to true, the cluster will be ignored from removal during CDS
+   *                       update. It can be overridden by setting `remove_ignored` to true while
+   *                       calling removeCluster(). This is useful for clusters whose lifecycle
+   *                       is managed with custom implementation, e.g., DFP clusters.
    * @return true if the action results in an add/update of a cluster.
    */
   virtual bool addOrUpdateCluster(const envoy::config::cluster::v3::Cluster& cluster,
-                                  const std::string& version_info) PURE;
+                                  const std::string& version_info,
+                                  const bool avoid_cds_removal = false) PURE;
 
   /**
    * Set a callback that will be invoked when all primary clusters have been initialized.
@@ -242,7 +270,7 @@ public:
    * The "initialized callback" set in the method above is invoked when secondary and
    * dynamically provisioned clusters have finished initializing.
    */
-  virtual void
+  virtual absl::Status
   initializeSecondaryClusters(const envoy::config::bootstrap::v3::Bootstrap& bootstrap) PURE;
 
   using ClusterInfoMap = absl::flat_hash_map<std::string, std::reference_wrapper<const Cluster>>;
@@ -308,10 +336,11 @@ public:
    * Remove a cluster via API. Only clusters added via addOrUpdateCluster() can
    * be removed in this manner. Statically defined clusters present when Envoy starts cannot be
    * removed.
-   *
+   * Cluster created using `addOrUpdateCluster()` with `avoid_cds_removal` set to true.
+   * can be removed by setting `remove_ignored` to true while removeCluster().
    * @return true if the action results in the removal of a cluster.
    */
-  virtual bool removeCluster(const std::string& cluster) PURE;
+  virtual bool removeCluster(const std::string& cluster, const bool remove_ignored = false) PURE;
 
   /**
    * Shutdown the cluster manager prior to destroying connection pools and other thread local data.
@@ -422,10 +451,10 @@ public:
   virtual void drainConnections(DrainConnectionsHostPredicate predicate) PURE;
 
   /**
-   * Check if the cluster is active and statically configured, and if not, throw exception.
+   * Check if the cluster is active and statically configured, and if not, return an error
    * @param cluster, the cluster to check.
    */
-  virtual void checkActiveStaticCluster(const std::string& cluster) PURE;
+  virtual absl::Status checkActiveStaticCluster(const std::string& cluster) PURE;
 
   /**
    * Allocates an on-demand CDS API provider from configuration proto or locator.
@@ -452,6 +481,13 @@ public:
    * Returns an EdsResourcesCache that is unique for the cluster manager.
    */
   virtual Config::EdsResourcesCacheOptRef edsResourcesCache() PURE;
+
+  /**
+   * Create a QUIC network observer registry for each worker thread using the given factory.
+   * @param factory used to create a registry object.
+   */
+  virtual void createNetworkObserverRegistries(
+      Envoy::Quic::EnvoyQuicNetworkObserverRegistryFactory& factory) PURE;
 };
 
 using ClusterManagerPtr = std::unique_ptr<ClusterManager>;
@@ -491,6 +527,8 @@ public:
 
   /**
    * Allocate a cluster manager from configuration proto.
+   * The cluster manager initialize() method needs to be called right after this method.
+   * Please check https://github.com/envoyproxy/envoy/issues/33218 for details.
    */
   virtual ClusterManagerPtr
   clusterManagerFromProto(const envoy::config::bootstrap::v3::Bootstrap& bootstrap) PURE;
@@ -498,6 +536,8 @@ public:
   /**
    * Allocate an HTTP connection pool for the host. Pools are separated by 'priority',
    * 'protocol', and 'options->hashKey()', if any.
+   * @param network_observer_registry if not null all the QUIC connections created by this pool
+   * should register to it for network events.
    */
   virtual Http::ConnectionPool::InstancePtr
   allocateConnPool(Event::Dispatcher& dispatcher, HostConstSharedPtr host,
@@ -507,7 +547,8 @@ public:
                    const Network::ConnectionSocket::OptionsSharedPtr& options,
                    const Network::TransportSocketOptionsConstSharedPtr& transport_socket_options,
                    TimeSource& time_source, ClusterConnectivityState& state,
-                   Http::PersistentQuicInfoPtr& quic_info) PURE;
+                   Http::PersistentQuicInfoPtr& quic_info,
+                   OptRef<Quic::EnvoyQuicNetworkObserverRegistry> network_observer_registry) PURE;
 
   /**
    * Allocate a TCP connection pool for the host. Pools are separated by 'priority' and

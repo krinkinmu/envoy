@@ -3,7 +3,6 @@ package io.envoyproxy.envoymobile
 import io.envoyproxy.envoymobile.engine.EnvoyEngine
 import java.nio.ByteBuffer
 import java.util.concurrent.Executor
-import java.util.concurrent.Executors
 
 /**
  * A type representing a stream that has not yet been started.
@@ -16,7 +15,6 @@ import java.util.concurrent.Executors
 open class StreamPrototype(private val engine: EnvoyEngine) {
   private val callbacks = StreamCallbacks()
   private var explicitFlowControl = false
-  private var minDeliverySize: Long = 0
   private var useByteBufferPosition = false
 
   /**
@@ -25,22 +23,9 @@ open class StreamPrototype(private val engine: EnvoyEngine) {
    * @param executor Executor on which to receive callback events.
    * @return The new stream.
    */
-  open fun start(executor: Executor = Executors.newSingleThreadExecutor()): Stream {
-    val engineStream =
-      engine.startStream(createCallbacks(executor), explicitFlowControl, minDeliverySize)
+  open fun start(executor: Executor? = null): Stream {
+    val engineStream = engine.startStream(createCallbacks(executor), explicitFlowControl)
     return Stream(engineStream, useByteBufferPosition)
-  }
-
-  /**
-   * Sets min delivery: data will be buffered in the C++ layer until the min delivery length or end
-   * stream is read.
-   *
-   * @param value set the minimum delivery size fo for this stream
-   * @return This stream, for chaining syntax.
-   */
-  fun setMinDeliverySize(value: Long): StreamPrototype {
-    this.minDeliverySize = value
-    return this
   }
 
   /**
@@ -171,7 +156,7 @@ open class StreamPrototype(private val engine: EnvoyEngine) {
    * @param executor Executor on which to receive callback events.
    * @return A new set of engine callbacks.
    */
-  internal fun createCallbacks(executor: Executor): EnvoyHTTPCallbacksAdapter {
+  protected fun createCallbacks(executor: Executor?): EnvoyHTTPCallbacksAdapter {
     return EnvoyHTTPCallbacksAdapter(executor, callbacks)
   }
 }

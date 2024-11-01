@@ -12,9 +12,9 @@
 #include "source/common/network/transport_socket_options_impl.h"
 #include "source/common/router/string_accessor_impl.h"
 #include "source/common/stream_info/uint32_accessor_impl.h"
+#include "source/common/tls/cert_validator/default_validator.h"
+#include "source/common/tls/utility.h"
 #include "source/extensions/common/dynamic_forward_proxy/dns_cache_manager_impl.h"
-#include "source/extensions/transport_sockets/tls/cert_validator/default_validator.h"
-#include "source/extensions/transport_sockets/tls/utility.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -53,12 +53,13 @@ REGISTER_FACTORY(DynamicPortObjectFactory, StreamInfo::FilterState::ObjectFactor
 
 Cluster::Cluster(
     const envoy::config::cluster::v3::Cluster& cluster,
+    Extensions::Common::DynamicForwardProxy::DnsCacheSharedPtr&& cache,
     const envoy::extensions::clusters::dynamic_forward_proxy::v3::ClusterConfig& config,
     Upstream::ClusterFactoryContext& context,
-    Extensions::Common::DynamicForwardProxy::DnsCacheManagerFactory& cache_manager_factory)
-    : Upstream::BaseDynamicClusterImpl(cluster, context),
-      dns_cache_manager_(cache_manager_factory.get()),
-      dns_cache_(dns_cache_manager_->getCache(config.dns_cache_config())),
+    Extensions::Common::DynamicForwardProxy::DnsCacheManagerSharedPtr&& cache_manager,
+    absl::Status& creation_status)
+    : Upstream::BaseDynamicClusterImpl(cluster, context, creation_status),
+      dns_cache_manager_(std::move(cache_manager)), dns_cache_(std::move(cache)),
       update_callbacks_handle_(dns_cache_->addUpdateCallbacks(*this)),
       local_info_(context.serverFactoryContext().localInfo()),
       main_thread_dispatcher_(context.serverFactoryContext().mainThreadDispatcher()),
@@ -92,7 +93,9 @@ Cluster::~Cluster() {
     auto cluster_name = it->first;
     ENVOY_LOG(debug, "cluster='{}' removing from cluster_map & cluster manager", cluster_name);
     cluster_map_.erase(it++);
-    cm_.removeCluster(cluster_name);
+    cm_.removeCluster(cluster_name,
+                      Runtime::runtimeFeatureEnabled(
+                          "envoy.reloadable_features.avoid_dfp_cluster_removal_on_cds_update"));
   }
 }
 
@@ -101,7 +104,10 @@ void Cluster::startPreInit() {
   std::unique_ptr<Upstream::HostVector> hosts_added;
   dns_cache_->iterateHostMap(
       [&](absl::string_view host, const Common::DynamicForwardProxy::DnsHostInfoSharedPtr& info) {
-        addOrUpdateHost(host, info, hosts_added);
+        absl::Status status = addOrUpdateHost(host, info, hosts_added);
+        if (!status.ok()) {
+          ENVOY_LOG(warn, "Failed to add host from cache: {}", status.message());
+        }
       });
   if (hosts_added) {
     updatePriorityState(*hosts_added, {});
@@ -130,7 +136,9 @@ void Cluster::checkIdleSubCluster() {
         auto cluster_name = it->first;
         ENVOY_LOG(debug, "cluster='{}' removing from cluster_map & cluster manager", cluster_name);
         cluster_map_.erase(it++);
-        cm_.removeCluster(cluster_name);
+        cm_.removeCluster(cluster_name,
+                          Runtime::runtimeFeatureEnabled(
+                              "envoy.reloadable_features.avoid_dfp_cluster_removal_on_cds_update"));
       } else {
         ++it;
       }
@@ -186,7 +194,9 @@ Cluster::createSubClusterConfig(const std::string& cluster_name, const std::stri
 Upstream::HostConstSharedPtr Cluster::chooseHost(absl::string_view host,
                                                  Upstream::LoadBalancerContext* context) const {
   uint16_t default_port = 80;
-  if (info_->transportSocketMatcher().resolve(nullptr).factory_.implementsSecureTransport()) {
+  if (info_->transportSocketMatcher()
+          .resolve(nullptr, nullptr)
+          .factory_.implementsSecureTransport()) {
     default_port = 443;
   }
 
@@ -235,7 +245,7 @@ bool Cluster::ClusterInfo::checkIdle() {
   return false;
 }
 
-void Cluster::addOrUpdateHost(
+absl::Status Cluster::addOrUpdateHost(
     absl::string_view host,
     const Extensions::Common::DynamicForwardProxy::DnsHostInfoSharedPtr& host_info,
     std::unique_ptr<Upstream::HostVector>& hosts_added) {
@@ -273,18 +283,20 @@ void Cluster::addOrUpdateHost(
       ENVOY_LOG(debug, "updating dfproxy cluster host address '{}'", host);
       host_map_it->second.logical_host_->setNewAddresses(
           host_info->address(), host_info->addressList(), dummy_lb_endpoint_);
-      return;
+      return absl::OkStatus();
     }
 
     ENVOY_LOG(debug, "adding new dfproxy cluster host '{}'", host);
+    auto host_or_error = Upstream::LogicalHost::create(
+        info(), std::string{host}, host_info->address(), host_info->addressList(),
+        dummy_locality_lb_endpoint_, dummy_lb_endpoint_, nullptr, time_source_);
+    RETURN_IF_NOT_OK_REF(host_or_error.status());
 
-    emplaced_host = host_map_
-                        .try_emplace(host, host_info,
-                                     std::make_shared<Upstream::LogicalHost>(
-                                         info(), std::string{host}, host_info->address(),
-                                         host_info->addressList(), dummy_locality_lb_endpoint_,
-                                         dummy_lb_endpoint_, nullptr, time_source_))
-                        .first->second.logical_host_;
+    emplaced_host =
+        host_map_
+            .try_emplace(host, host_info,
+                         std::shared_ptr<Upstream::LogicalHost>(host_or_error->release()))
+            .first->second.logical_host_;
   }
 
   ASSERT(emplaced_host);
@@ -292,24 +304,26 @@ void Cluster::addOrUpdateHost(
     hosts_added = std::make_unique<Upstream::HostVector>();
   }
   hosts_added->emplace_back(emplaced_host);
+  return absl::OkStatus();
 }
 
-void Cluster::onDnsHostAddOrUpdate(
+absl::Status Cluster::onDnsHostAddOrUpdate(
     const std::string& host,
     const Extensions::Common::DynamicForwardProxy::DnsHostInfoSharedPtr& host_info) {
   ENVOY_LOG(debug, "Adding host info for {}", host);
 
   std::unique_ptr<Upstream::HostVector> hosts_added;
-  addOrUpdateHost(host, host_info, hosts_added);
+  RETURN_IF_NOT_OK(addOrUpdateHost(host, host_info, hosts_added));
   if (hosts_added != nullptr) {
     ASSERT(!hosts_added->empty());
     updatePriorityState(*hosts_added, {});
   }
+  return absl::OkStatus();
 }
 
 void Cluster::updatePriorityState(const Upstream::HostVector& hosts_added,
                                   const Upstream::HostVector& hosts_removed) {
-  Upstream::PriorityStateManager priority_state_manager(*this, local_info_, nullptr);
+  Upstream::PriorityStateManager priority_state_manager(*this, local_info_, nullptr, random_);
   priority_state_manager.initializePriorityFor(dummy_locality_lb_endpoint_);
   {
     absl::ReaderMutexLock lock{&host_map_lock_};
@@ -365,7 +379,7 @@ Cluster::LoadBalancer::chooseHost(Upstream::LoadBalancerContext* context) {
   // stream metadata, or configuration (which is then added as stream metadata).
   const bool is_secure = cluster_.info()
                              ->transportSocketMatcher()
-                             .resolve(nullptr)
+                             .resolve(nullptr, nullptr)
                              .factory_.implementsSecureTransport();
   uint32_t port = is_secure ? 443 : 80;
   if (context->requestStreamInfo()) {
@@ -378,17 +392,19 @@ Cluster::LoadBalancer::chooseHost(Upstream::LoadBalancerContext* context) {
     }
   }
 
-  std::string host = Common::DynamicForwardProxy::DnsHostInfo::normalizeHostForDfp(raw_host, port);
-
-  if (host.empty()) {
+  if (raw_host.empty()) {
     ENVOY_LOG(debug, "host empty");
     return nullptr;
   }
+  std::string host = Common::DynamicForwardProxy::DnsHostInfo::normalizeHostForDfp(raw_host, port);
 
   if (cluster_.enableSubCluster()) {
     return cluster_.chooseHost(host, context);
   }
+  return findHostByName(host);
+}
 
+Upstream::HostConstSharedPtr Cluster::LoadBalancer::findHostByName(const std::string& host) const {
   {
     absl::ReaderMutexLock lock{&cluster_.host_map_lock_};
     const auto host_it = cluster_.host_map_.find(host);
@@ -478,18 +494,9 @@ ClusterFactory::createClusterWithConfig(
     const envoy::extensions::clusters::dynamic_forward_proxy::v3::ClusterConfig& proto_config,
     Upstream::ClusterFactoryContext& context) {
 
-  auto& server_context = context.serverFactoryContext();
-
-  // The message validation visitor of Upstream::ClusterFactoryContext should be used for
-  // validating the cluster config.
-  Server::FactoryContextBaseImpl factory_context_base(
-      server_context.options(), server_context.mainThreadDispatcher(), server_context.api(),
-      server_context.localInfo(), server_context.admin(), server_context.runtime(),
-      server_context.singletonManager(), context.messageValidationVisitor(),
-      server_context.serverScope().store(), server_context.threadLocal());
-
   Extensions::Common::DynamicForwardProxy::DnsCacheManagerFactoryImpl cache_manager_factory(
-      factory_context_base);
+      context.serverFactoryContext(), context.messageValidationVisitor());
+
   envoy::config::cluster::v3::Cluster cluster_config = cluster;
   if (!cluster_config.has_upstream_http_protocol_options()) {
     // This sets defaults which will only apply if using old style http config.
@@ -499,11 +506,19 @@ ClusterFactory::createClusterWithConfig(
     cluster_config.mutable_upstream_http_protocol_options()->set_auto_san_validation(true);
   }
 
+  Extensions::Common::DynamicForwardProxy::DnsCacheManagerSharedPtr cache_manager =
+      cache_manager_factory.get();
+  auto dns_cache_or_error = cache_manager->getCache(proto_config.dns_cache_config());
+  RETURN_IF_NOT_OK_REF(dns_cache_or_error.status());
+
+  absl::Status creation_status = absl::OkStatus();
   auto new_cluster = std::shared_ptr<Cluster>(
-      new Cluster(cluster_config, proto_config, context, cache_manager_factory));
+      new Cluster(cluster_config, std::move(dns_cache_or_error.value()), proto_config, context,
+                  std::move(cache_manager), creation_status));
+  RETURN_IF_NOT_OK(creation_status);
 
   Extensions::Common::DynamicForwardProxy::DFPClusterStoreFactory cluster_store_factory(
-      factory_context_base);
+      context.serverFactoryContext().singletonManager());
   cluster_store_factory.get()->save(new_cluster->info()->name(), new_cluster);
 
   auto& options = new_cluster->info()->upstreamHttpProtocolOptions();

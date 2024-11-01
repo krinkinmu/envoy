@@ -11,11 +11,11 @@ envoy_package()
 envoy_cc_library(
     name = "config_provider_interface",
     hdrs = ["config_provider.h"],
-    external_deps = ["abseil_optional"],
     deps = [
         "//envoy/common:time_interface",
         "//source/common/common:assert_lib",
         "//source/common/protobuf",
+        "@com_google_absl//absl/types:optional",
     ],
 )
 
@@ -43,7 +43,7 @@ envoy_cc_library(
     hdrs = ["context_provider.h"],
     deps = [
         "//envoy/common:callback",
-        "@com_github_cncf_udpa//xds/core/v3:pkg_cc_proto",
+        "@com_github_cncf_xds//xds/core/v3:pkg_cc_proto",
     ],
 )
 
@@ -89,7 +89,7 @@ envoy_cc_library(
         ":custom_config_validators_interface",
         ":subscription_interface",
         "//envoy/common:backoff_strategy_interface",
-        "@com_github_cncf_udpa//xds/core/v3:pkg_cc_proto",
+        "@com_github_cncf_xds//xds/core/v3:pkg_cc_proto",
         "@envoy_api//envoy/config/core/v3:pkg_cc_proto",
     ],
 )
@@ -125,12 +125,12 @@ envoy_cc_library(
 envoy_cc_library(
     name = "xds_resources_delegate_interface",
     hdrs = ["xds_resources_delegate.h"],
-    external_deps = ["abseil_optional"],
     deps = [
         ":subscription_interface",
         ":typed_config_interface",
         "//envoy/api:api_interface",
         "//envoy/protobuf:message_validator_interface",
+        "@com_google_absl//absl/types:optional",
         "@envoy_api//envoy/service/discovery/v3:pkg_cc_proto",
     ],
 )

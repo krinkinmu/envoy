@@ -38,9 +38,10 @@ public:
     absl::optional<DnsHostInfoSharedPtr> host_info_;
   };
 
-  LoadDnsCacheEntryResult loadDnsCacheEntry(absl::string_view host, uint16_t default_port,
-                                            bool is_proxy_request,
-                                            LoadDnsCacheEntryCallbacks& callbacks) override {
+  LoadDnsCacheEntryResult
+  loadDnsCacheEntryWithForceRefresh(absl::string_view host, uint16_t default_port,
+                                    bool is_proxy_request, bool,
+                                    LoadDnsCacheEntryCallbacks& callbacks) override {
     MockLoadDnsCacheEntryResult result =
         loadDnsCacheEntry_(host, default_port, is_proxy_request, callbacks);
     return {result.status_, LoadDnsCacheEntryHandlePtr{result.handle_}, result.host_info_};
@@ -63,6 +64,8 @@ public:
   MOCK_METHOD((absl::optional<const DnsHostInfoSharedPtr>), getHost, (absl::string_view));
   MOCK_METHOD(Upstream::ResourceAutoIncDec*, canCreateDnsRequest_, ());
   MOCK_METHOD(void, forceRefreshHosts, ());
+  MOCK_METHOD(void, setIpVersionToRemove, (absl::optional<Network::Address::IpVersion>));
+  MOCK_METHOD(void, stop, ());
 };
 
 class MockLoadDnsCacheEntryHandle : public DnsCache::LoadDnsCacheEntryHandle {
@@ -78,7 +81,7 @@ public:
   MockDnsCacheManager();
   ~MockDnsCacheManager() override;
 
-  MOCK_METHOD(DnsCacheSharedPtr, getCache,
+  MOCK_METHOD(absl::StatusOr<DnsCacheSharedPtr>, getCache,
               (const envoy::extensions::common::dynamic_forward_proxy::v3::DnsCacheConfig& config));
   MOCK_METHOD(DnsCacheSharedPtr, lookUpCacheByName, (absl::string_view cache_name));
 
@@ -95,6 +98,8 @@ public:
   MOCK_METHOD(const std::string&, resolvedHost, (), (const));
   MOCK_METHOD(bool, isIpAddress, (), (const));
   MOCK_METHOD(void, touch, ());
+  MOCK_METHOD(bool, firstResolveComplete, (), (const));
+  MOCK_METHOD(std::string, details, ());
 
   Network::Address::InstanceConstSharedPtr address_;
   std::vector<Network::Address::InstanceConstSharedPtr> address_list_;
@@ -106,7 +111,7 @@ public:
   MockUpdateCallbacks();
   ~MockUpdateCallbacks() override;
 
-  MOCK_METHOD(void, onDnsHostAddOrUpdate,
+  MOCK_METHOD(absl::Status, onDnsHostAddOrUpdate,
               (const std::string& host, const DnsHostInfoSharedPtr& address));
   MOCK_METHOD(void, onDnsHostRemove, (const std::string& host));
   MOCK_METHOD(void, onDnsResolutionComplete,

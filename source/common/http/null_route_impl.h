@@ -64,17 +64,20 @@ struct NullVirtualHost : public Router::VirtualHost {
   bool includeIsTimeoutRetryHeader() const override { return false; }
   uint32_t retryShadowBufferLimit() const override { return std::numeric_limits<uint32_t>::max(); }
   const Router::RouteSpecificFilterConfig*
-  mostSpecificPerFilterConfig(const std::string&) const override {
+  mostSpecificPerFilterConfig(absl::string_view) const override {
     return nullptr;
   }
-  void traversePerFilterConfig(
-      const std::string&,
-      std::function<void(const Router::RouteSpecificFilterConfig&)>) const override {}
+  Router::RouteSpecificFilterConfigs perFilterConfigs(absl::string_view) const override {
+    return {};
+  }
   const envoy::config::core::v3::Metadata& metadata() const override {
     return Router::DefaultRouteMetadataPack::get().proto_metadata_;
   }
   const Envoy::Config::TypedMetadata& typedMetadata() const override {
     return Router::DefaultRouteMetadataPack::get().typed_metadata_;
+  }
+  const Router::VirtualCluster* virtualCluster(const Http::HeaderMap&) const override {
+    return nullptr;
   }
 
   static const NullRateLimitPolicy rate_limit_policy_;
@@ -88,27 +91,21 @@ struct NullPathMatchCriterion : public Router::PathMatchCriterion {
 
 struct RouteEntryImpl : public Router::RouteEntry {
   RouteEntryImpl(
-      const std::string& cluster_name, Singleton::Manager& singleton_manager,
-      const absl::optional<std::chrono::milliseconds>& timeout,
+      const std::string& cluster_name, const absl::optional<std::chrono::milliseconds>& timeout,
       const Protobuf::RepeatedPtrField<envoy::config::route::v3::RouteAction::HashPolicy>&
           hash_policy,
-      const absl::optional<envoy::config::route::v3::RetryPolicy>& retry_policy)
-      : cluster_name_(cluster_name), timeout_(timeout) {
+      const Router::RetryPolicy& retry_policy, Regex::Engine& regex_engine)
+      : retry_policy_(retry_policy), cluster_name_(cluster_name), timeout_(timeout) {
     if (!hash_policy.empty()) {
-      hash_policy_ = std::make_unique<HashPolicyImpl>(hash_policy);
-    }
-    if (retry_policy.has_value()) {
-      // ProtobufMessage::getStrictValidationVisitor() ?  how often do we do this?
-      Upstream::RetryExtensionFactoryContextImpl factory_context(singleton_manager);
-      retry_policy_ = std::make_unique<Router::RetryPolicyImpl>(
-          retry_policy.value(), ProtobufMessage::getNullValidationVisitor(), factory_context);
-    } else {
-      retry_policy_ = std::make_unique<Router::RetryPolicyImpl>();
+      hash_policy_ = std::make_unique<HashPolicyImpl>(hash_policy, regex_engine);
     }
   }
 
   // Router::RouteEntry
   const std::string& clusterName() const override { return cluster_name_; }
+  const std::string getRequestHostValue(const Http::RequestHeaderMap& headers) const override {
+    return std::string(headers.getHostValue());
+  }
   const Router::RouteStatsContextOptRef routeStatsContext() const override {
     return Router::RouteStatsContextOptRef();
   }
@@ -139,7 +136,7 @@ struct RouteEntryImpl : public Router::RouteEntry {
     return Upstream::ResourcePriority::Default;
   }
   const Router::RateLimitPolicy& rateLimitPolicy() const override { return rate_limit_policy_; }
-  const Router::RetryPolicy& retryPolicy() const override { return *retry_policy_; }
+  const Router::RetryPolicy& retryPolicy() const override { return retry_policy_; }
   const Router::InternalRedirectPolicy& internalRedirectPolicy() const override {
     return internal_redirect_policy_;
   }
@@ -173,16 +170,12 @@ struct RouteEntryImpl : public Router::RouteEntry {
   absl::optional<std::chrono::milliseconds> grpcTimeoutOffset() const override {
     return absl::nullopt;
   }
-  const Router::VirtualCluster* virtualCluster(const Http::HeaderMap&) const override {
-    return nullptr;
-  }
   const Router::TlsContextMatchCriteria* tlsContextMatchCriteria() const override {
     return nullptr;
   }
   const std::multimap<std::string, std::string>& opaqueConfig() const override {
     return opaque_config_;
   }
-  const Router::VirtualHost& virtualHost() const override { return virtual_host_; }
   bool autoHostRewrite() const override { return false; }
   bool appendXfh() const override { return false; }
   bool includeVirtualHostRateLimits() const override { return true; }
@@ -198,7 +191,7 @@ struct RouteEntryImpl : public Router::RouteEntry {
   const Router::EarlyDataPolicy& earlyDataPolicy() const override { return *early_data_policy_; }
 
   std::unique_ptr<const HashPolicyImpl> hash_policy_;
-  std::unique_ptr<Router::RetryPolicy> retry_policy_;
+  const Router::RetryPolicy& retry_policy_;
 
   static const NullHedgePolicy hedge_policy_;
   static const NullRateLimitPolicy rate_limit_policy_;
@@ -206,7 +199,6 @@ struct RouteEntryImpl : public Router::RouteEntry {
   static const Router::PathMatcherSharedPtr path_matcher_;
   static const Router::PathRewriterSharedPtr path_rewriter_;
   static const std::vector<Router::ShadowPolicyPtr> shadow_policies_;
-  static const NullVirtualHost virtual_host_;
   static const std::multimap<std::string, std::string> opaque_config_;
   static const NullPathMatchCriterion path_match_criterion_;
 
@@ -220,12 +212,12 @@ struct RouteEntryImpl : public Router::RouteEntry {
 };
 
 struct NullRouteImpl : public Router::Route {
-  NullRouteImpl(const std::string cluster_name, Singleton::Manager& singleton_manager,
+  NullRouteImpl(const std::string cluster_name, const Router::RetryPolicy& retry_policy,
+                Regex::Engine& regex_engine,
                 const absl::optional<std::chrono::milliseconds>& timeout = {},
                 const Protobuf::RepeatedPtrField<envoy::config::route::v3::RouteAction::HashPolicy>&
-                    hash_policy = {},
-                const absl::optional<envoy::config::route::v3::RetryPolicy>& retry_policy = {})
-      : route_entry_(cluster_name, singleton_manager, timeout, hash_policy, retry_policy) {}
+                    hash_policy = {})
+      : route_entry_(cluster_name, timeout, hash_policy, retry_policy, regex_engine) {}
 
   // Router::Route
   const Router::DirectResponseEntry* directResponseEntry() const override { return nullptr; }
@@ -233,12 +225,12 @@ struct NullRouteImpl : public Router::Route {
   const Router::Decorator* decorator() const override { return nullptr; }
   const Router::RouteTracing* tracingConfig() const override { return nullptr; }
   const Router::RouteSpecificFilterConfig*
-  mostSpecificPerFilterConfig(const std::string&) const override {
+  mostSpecificPerFilterConfig(absl::string_view) const override {
     return nullptr;
   }
-  void traversePerFilterConfig(
-      const std::string&,
-      std::function<void(const Router::RouteSpecificFilterConfig&)>) const override {}
+  Router::RouteSpecificFilterConfigs perFilterConfigs(absl::string_view) const override {
+    return {};
+  }
   const envoy::config::core::v3::Metadata& metadata() const override {
     return Router::DefaultRouteMetadataPack::get().proto_metadata_;
   }
@@ -247,8 +239,10 @@ struct NullRouteImpl : public Router::Route {
   }
   absl::optional<bool> filterDisabled(absl::string_view) const override { return {}; }
   const std::string& routeName() const override { return EMPTY_STRING; }
+  const Router::VirtualHost& virtualHost() const override { return virtual_host_; }
 
   RouteEntryImpl route_entry_;
+  static const NullVirtualHost virtual_host_;
 };
 
 } // namespace Http

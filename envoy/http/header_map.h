@@ -13,7 +13,7 @@
 #include "envoy/common/pure.h"
 #include "envoy/common/union_string.h"
 #include "envoy/http/header_formatter.h"
-#include "envoy/tracing/trace_context.h"
+#include "envoy/stream_info/filter_state.h"
 
 #include "source/common/common/assert.h"
 #include "source/common/common/hash.h"
@@ -728,8 +728,7 @@ public:
 // Request headers.
 class RequestHeaderMap
     : public RequestOrResponseHeaderMap,
-      public CustomInlineHeaderBase<CustomInlineHeaderRegistry::Type::RequestHeaders>,
-      public Tracing::TraceContext {
+      public CustomInlineHeaderBase<CustomInlineHeaderRegistry::Type::RequestHeaders> {
 public:
   INLINE_REQ_STRING_HEADERS(DEFINE_INLINE_STRING_HEADER)
   INLINE_REQ_NUMERIC_HEADERS(DEFINE_INLINE_NUMERIC_HEADER)
@@ -782,6 +781,14 @@ using ResponseTrailerMapSharedPtr = std::shared_ptr<ResponseTrailerMap>;
 using ResponseTrailerMapConstSharedPtr = std::shared_ptr<const ResponseTrailerMap>;
 using ResponseTrailerMapOptRef = OptRef<ResponseTrailerMap>;
 using ResponseTrailerMapOptConstRef = OptRef<const ResponseTrailerMap>;
+
+/**
+ * Base class for both tunnel response headers and trailers.
+ */
+class TunnelResponseHeadersOrTrailers : public StreamInfo::FilterState::Object {
+public:
+  virtual const HeaderMap& value() const PURE;
+};
 
 /**
  * Convenient container type for storing Http::LowerCaseString and std::string key/value pairs.

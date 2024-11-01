@@ -36,11 +36,22 @@
 #include "absl/container/node_hash_map.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverloaded-virtual"
+#endif
+
 #include "eval/public/cel_value.h"
 #include "eval/public/containers/field_access.h"
 #include "eval/public/containers/field_backed_list_impl.h"
 #include "eval/public/containers/field_backed_map_impl.h"
 #include "eval/public/structs/cel_proto_wrapper.h"
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 #include "include/proxy-wasm/pairs_util.h"
 #include "openssl/bytestring.h"
 #include "openssl/hmac.h"
@@ -88,13 +99,6 @@ Http::RequestHeaderMapPtr buildRequestHeaderMapFromPairs(const Pairs& pairs) {
 }
 
 template <typename P> static uint32_t headerSize(const P& p) { return p ? p->size() : 0; }
-
-Upstream::HostDescriptionConstSharedPtr getHost(const StreamInfo::StreamInfo* info) {
-  if (info && info->upstreamInfo() && info->upstreamInfo().value().get().upstreamHost()) {
-    return info->upstreamInfo().value().get().upstreamHost();
-  }
-  return nullptr;
-}
 
 } // namespace
 
@@ -191,7 +195,7 @@ void Context::onResolveDns(uint32_t token, Envoy::Network::DnsResolver::Resoluti
   if (wasm()->isFailed() || !wasm()->on_resolve_dns_) {
     return;
   }
-  if (status != Network::DnsResolver::ResolutionStatus::Success) {
+  if (status != Network::DnsResolver::ResolutionStatus::Completed) {
     buffer_.set("");
     wasm()->on_resolve_dns_(this, id_, token, 0);
     return;
@@ -424,10 +428,7 @@ WasmResult serializeValue(Filters::Common::Expr::CelValue value, std::string* re
   return WasmResult::SerializationFailure;
 }
 
-#define PROPERTY_TOKENS(_f)                                                                        \
-  _f(NODE) _f(LISTENER_DIRECTION) _f(LISTENER_METADATA) _f(CLUSTER_NAME) _f(CLUSTER_METADATA)      \
-      _f(ROUTE_NAME) _f(ROUTE_METADATA) _f(PLUGIN_NAME) _f(UPSTREAM_HOST_METADATA)                 \
-          _f(PLUGIN_ROOT_ID) _f(PLUGIN_VM_ID) _f(CONNECTION_ID)
+#define PROPERTY_TOKENS(_f) _f(PLUGIN_NAME) _f(PLUGIN_ROOT_ID) _f(PLUGIN_VM_ID) _f(CONNECTION_ID)
 
 static inline std::string downCase(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -456,6 +457,11 @@ Context::findValue(absl::string_view name, Protobuf::Arena* arena, bool last) co
   // In order to delegate to the StreamActivation method, we have to set the
   // context properties to match the Wasm context properties in all callbacks
   // (e.g. onLog or onEncodeHeaders) for the duration of the call.
+  if (root_local_info_) {
+    local_info_ = root_local_info_;
+  } else if (plugin_) {
+    local_info_ = &plugin()->localInfo();
+  }
   activation_info_ = info;
   activation_request_headers_ = request_headers_ ? request_headers_ : access_log_request_headers_;
   activation_response_headers_ =
@@ -497,57 +503,6 @@ Context::findValue(absl::string_view name, Protobuf::Arena* arena, bool last) co
     }
     break;
   }
-  case PropertyToken::NODE:
-    if (root_local_info_) {
-      return CelProtoWrapper::CreateMessage(&root_local_info_->node(), arena);
-    } else if (plugin_) {
-      return CelProtoWrapper::CreateMessage(&plugin()->localInfo().node(), arena);
-    }
-    break;
-  case PropertyToken::LISTENER_DIRECTION:
-    if (plugin_) {
-      return CelValue::CreateInt64(plugin()->direction());
-    }
-    break;
-  case PropertyToken::LISTENER_METADATA:
-    if (plugin_) {
-      return CelProtoWrapper::CreateMessage(plugin()->listenerMetadata(), arena);
-    }
-    break;
-  case PropertyToken::CLUSTER_NAME:
-    if (getHost(info)) {
-      return CelValue::CreateString(&getHost(info)->cluster().name());
-    } else if (info && info->route() && info->route()->routeEntry()) {
-      return CelValue::CreateString(&info->route()->routeEntry()->clusterName());
-    } else if (info && info->upstreamClusterInfo().has_value() &&
-               info->upstreamClusterInfo().value()) {
-      return CelValue::CreateString(&info->upstreamClusterInfo().value()->name());
-    }
-    break;
-  case PropertyToken::CLUSTER_METADATA:
-    if (getHost(info)) {
-      return CelProtoWrapper::CreateMessage(&getHost(info)->cluster().metadata(), arena);
-    } else if (info && info->upstreamClusterInfo().has_value() &&
-               info->upstreamClusterInfo().value()) {
-      return CelProtoWrapper::CreateMessage(&info->upstreamClusterInfo().value()->metadata(),
-                                            arena);
-    }
-    break;
-  case PropertyToken::UPSTREAM_HOST_METADATA:
-    if (getHost(info)) {
-      return CelProtoWrapper::CreateMessage(getHost(info)->metadata().get(), arena);
-    }
-    break;
-  case PropertyToken::ROUTE_NAME:
-    if (info) {
-      return CelValue::CreateString(&info->getRouteName());
-    }
-    break;
-  case PropertyToken::ROUTE_METADATA:
-    if (info && info->route()) {
-      return CelProtoWrapper::CreateMessage(&info->route()->metadata(), arena);
-    }
-    break;
   case PropertyToken::PLUGIN_NAME:
     if (plugin_) {
       return CelValue::CreateStringView(plugin()->name_);
@@ -716,8 +671,8 @@ WasmResult Context::addHeaderMapValue(WasmHeaderMapType type, std::string_view k
   }
   const Http::LowerCaseString lower_key{std::string(key)};
   map->addCopy(lower_key, std::string(value));
-  if (type == WasmHeaderMapType::RequestHeaders && decoder_callbacks_) {
-    decoder_callbacks_->downstreamCallbacks()->clearRouteCache();
+  if (type == WasmHeaderMapType::RequestHeaders) {
+    clearRouteCache();
   }
   return WasmResult::Ok;
 }
@@ -791,8 +746,8 @@ WasmResult Context::setHeaderMapPairs(WasmHeaderMapType type, const Pairs& pairs
     const Http::LowerCaseString lower_key{std::string(p.first)};
     map->addCopy(lower_key, std::string(p.second));
   }
-  if (type == WasmHeaderMapType::RequestHeaders && decoder_callbacks_) {
-    decoder_callbacks_->downstreamCallbacks()->clearRouteCache();
+  if (type == WasmHeaderMapType::RequestHeaders) {
+    clearRouteCache();
   }
   return WasmResult::Ok;
 }
@@ -804,8 +759,8 @@ WasmResult Context::removeHeaderMapValue(WasmHeaderMapType type, std::string_vie
   }
   const Http::LowerCaseString lower_key{std::string(key)};
   map->remove(lower_key);
-  if (type == WasmHeaderMapType::RequestHeaders && decoder_callbacks_) {
-    decoder_callbacks_->downstreamCallbacks()->clearRouteCache();
+  if (type == WasmHeaderMapType::RequestHeaders) {
+    clearRouteCache();
   }
   return WasmResult::Ok;
 }
@@ -818,8 +773,8 @@ WasmResult Context::replaceHeaderMapValue(WasmHeaderMapType type, std::string_vi
   }
   const Http::LowerCaseString lower_key{std::string(key)};
   map->setCopy(lower_key, toAbslStringView(value));
-  if (type == WasmHeaderMapType::RequestHeaders && decoder_callbacks_) {
-    decoder_callbacks_->downstreamCallbacks()->clearRouteCache();
+  if (type == WasmHeaderMapType::RequestHeaders) {
+    clearRouteCache();
   }
   return WasmResult::Ok;
 }
@@ -979,8 +934,12 @@ WasmResult Context::grpcCall(std::string_view grpc_service, std::string_view ser
   auto& handler = grpc_call_request_[token];
   handler.context_ = this;
   handler.token_ = token;
-  auto grpc_client = clusterManager().grpcAsyncClientManager().getOrCreateRawAsyncClient(
+  auto client_or_error = clusterManager().grpcAsyncClientManager().getOrCreateRawAsyncClient(
       service_proto, *wasm()->scope_, true /* skip_cluster_check */);
+  if (!client_or_error.status().ok()) {
+    return WasmResult::BadArgument;
+  }
+  auto grpc_client = client_or_error.value();
   grpc_initial_metadata_ = buildRequestHeaderMapFromPairs(initial_metadata);
 
   // set default hash policy to be based on :authority to enable consistent hash
@@ -1024,8 +983,12 @@ WasmResult Context::grpcStream(std::string_view grpc_service, std::string_view s
   auto& handler = grpc_stream_[token];
   handler.context_ = this;
   handler.token_ = token;
-  auto grpc_client = clusterManager().grpcAsyncClientManager().getOrCreateRawAsyncClient(
+  auto client_or_error = clusterManager().grpcAsyncClientManager().getOrCreateRawAsyncClient(
       service_proto, *wasm()->scope_, true /* skip_cluster_check */);
+  if (!client_or_error.status().ok()) {
+    return WasmResult::BadArgument;
+  }
+  auto grpc_client = client_or_error.value();
   grpc_initial_metadata_ = buildRequestHeaderMapFromPairs(initial_metadata);
 
   // set default hash policy to be based on :authority to enable consistent hash
@@ -1476,10 +1439,8 @@ void Context::initializeWriteFilterCallbacks(Network::WriteFilterCallbacks& call
   network_write_filter_callbacks_ = &callbacks;
 }
 
-void Context::log(const Http::RequestHeaderMap* request_headers,
-                  const Http::ResponseHeaderMap* response_headers,
-                  const Http::ResponseTrailerMap* response_trailers,
-                  const StreamInfo::StreamInfo& stream_info, AccessLog::AccessLogType) {
+void Context::log(const Formatter::HttpFormatterContext& log_context,
+                  const StreamInfo::StreamInfo& stream_info) {
   // `log` may be called multiple times due to mid-request logging -- we only want to run on the
   // last call.
   if (!stream_info.requestComplete().has_value()) {
@@ -1495,10 +1456,10 @@ void Context::log(const Http::RequestHeaderMap* request_headers,
   }
 
   access_log_phase_ = true;
-  access_log_request_headers_ = request_headers;
+  access_log_request_headers_ = &log_context.requestHeaders();
   // ? request_trailers  ?
-  access_log_response_headers_ = response_headers;
-  access_log_response_trailers_ = response_trailers;
+  access_log_response_headers_ = &log_context.responseHeaders();
+  access_log_response_trailers_ = &log_context.responseTrailers();
   access_log_stream_info_ = &stream_info;
 
   onLog();
@@ -1669,8 +1630,16 @@ WasmResult Context::sendLocalResponse(uint32_t response_code, std::string_view b
       if (local_reply_sent_) {
         return;
       }
+      // C++, Rust and other SDKs use -1 (InvalidCode) as the default value if gRPC code is not set,
+      // which should be mapped to nullopt in Envoy to prevent it from sending a grpc-status trailer
+      // at all.
+      absl::optional<Grpc::Status::GrpcStatus> grpc_status_code = absl::nullopt;
+      if (grpc_status >= Grpc::Status::WellKnownGrpcStatus::Ok &&
+          grpc_status <= Grpc::Status::WellKnownGrpcStatus::MaximumKnown) {
+        grpc_status_code = Grpc::Status::WellKnownGrpcStatus(grpc_status);
+      }
       decoder_callbacks_->sendLocalReply(static_cast<Envoy::Http::Code>(response_code), body_text,
-                                         modify_headers, grpc_status, details);
+                                         modify_headers, grpc_status_code, details);
       local_reply_sent_ = true;
     });
   }
@@ -1692,6 +1661,9 @@ Http::FilterHeadersStatus Context::decodeHeaders(Http::RequestHeaderMap& headers
 Http::FilterDataStatus Context::decodeData(::Envoy::Buffer::Instance& data, bool end_stream) {
   if (!in_vm_context_created_) {
     return Http::FilterDataStatus::Continue;
+  }
+  if (buffering_request_body_) {
+    decoder_callbacks_->addDecodedData(data, false);
   }
   request_body_buffer_ = &data;
   end_of_stream_ = end_stream;
@@ -1763,6 +1735,9 @@ Http::FilterDataStatus Context::encodeData(::Envoy::Buffer::Instance& data, bool
   if (!in_vm_context_created_) {
     return Http::FilterDataStatus::Continue;
   }
+  if (buffering_response_body_) {
+    encoder_callbacks_->addEncodedData(data, false);
+  }
   response_body_buffer_ = &data;
   end_of_stream_ = end_stream;
   const auto buffer = getBuffer(WasmBufferType::HttpResponseBody);
@@ -1771,7 +1746,7 @@ Http::FilterDataStatus Context::encodeData(::Envoy::Buffer::Instance& data, bool
   buffering_response_body_ = false;
   switch (result) {
   case Http::FilterDataStatus::Continue:
-    request_body_buffer_ = nullptr;
+    response_body_buffer_ = nullptr;
     break;
   case Http::FilterDataStatus::StopIterationAndBuffer:
     buffering_response_body_ = true;

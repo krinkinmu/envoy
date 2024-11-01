@@ -40,7 +40,11 @@ public:
 
   /**
    * Connect to a remote host. Errors or connection events are reported via the
-   * event callback registered via setAsyncTcpClientCallbacks().
+   * event callback registered via setAsyncTcpClientCallbacks(). If the callbacks
+   * needs to be changed before reconnecting, it is required to set the callbacks
+   * again, before calling to connect() to attempting to reconnect.
+   * @returns true if a new client has created and the connection is in progress.
+   * @returns false if an underlying client exists and is connected or connecting.
    */
   virtual bool connect() PURE;
 
@@ -87,6 +91,11 @@ public:
    * @return if the client connects to a peer host.
    */
   virtual bool connected() PURE;
+
+  /**
+   * @return the streamInfo of the current connection if there is any.
+   */
+  virtual OptRef<StreamInfo::StreamInfo> getStreamInfo() PURE;
 };
 
 using AsyncTcpClientPtr = std::unique_ptr<AsyncTcpClient>;

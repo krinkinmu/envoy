@@ -23,7 +23,7 @@ namespace Envoy {
 namespace Upstream {
 namespace Outlier {
 
-DetectorSharedPtr DetectorImplFactory::createForCluster(
+absl::StatusOr<DetectorSharedPtr> DetectorImplFactory::createForCluster(
     Cluster& cluster, const envoy::config::cluster::v3::Cluster& cluster_config,
     Event::Dispatcher& dispatcher, Runtime::Loader& runtime, EventLoggerSharedPtr event_logger,
     Random::RandomGenerator& random) {
@@ -218,6 +218,8 @@ DetectorConfig::DetectorConfig(const envoy::config::cluster::v3::OutlierDetectio
           config, consecutive_gateway_failure, DEFAULT_CONSECUTIVE_GATEWAY_FAILURE))),
       max_ejection_percent_(static_cast<uint64_t>(PROTOBUF_GET_WRAPPED_OR_DEFAULT(
           config, max_ejection_percent, DEFAULT_MAX_EJECTION_PERCENT))),
+      always_eject_one_host_(
+          static_cast<bool>(PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, always_eject_one_host, false))),
       success_rate_minimum_hosts_(static_cast<uint64_t>(PROTOBUF_GET_WRAPPED_OR_DEFAULT(
           config, success_rate_minimum_hosts, DEFAULT_SUCCESS_RATE_MINIMUM_HOSTS))),
       success_rate_request_volume_(static_cast<uint64_t>(PROTOBUF_GET_WRAPPED_OR_DEFAULT(
@@ -284,7 +286,7 @@ DetectorImpl::~DetectorImpl() {
   }
 }
 
-std::shared_ptr<DetectorImpl>
+absl::StatusOr<std::shared_ptr<DetectorImpl>>
 DetectorImpl::create(Cluster& cluster, const envoy::config::cluster::v3::OutlierDetection& config,
                      Event::Dispatcher& dispatcher, Runtime::Loader& runtime,
                      TimeSource& time_source, EventLoggerSharedPtr event_logger,
@@ -293,7 +295,7 @@ DetectorImpl::create(Cluster& cluster, const envoy::config::cluster::v3::Outlier
       new DetectorImpl(cluster, config, dispatcher, runtime, time_source, event_logger, random));
 
   if (detector->config().maxEjectionTimeMs() < detector->config().baseEjectionTimeMs()) {
-    throw EnvoyException(
+    return absl::InvalidArgumentError(
         "outlier detector's max_ejection_time cannot be smaller than base_ejection_time");
   }
   detector->initialize(cluster);
@@ -309,18 +311,20 @@ void DetectorImpl::initialize(Cluster& cluster) {
   }
 
   if (config_.successfulActiveHealthCheckUnejectHost() && cluster.healthChecker() != nullptr) {
-    cluster.healthChecker()->addHostCheckCompleteCb([this](HostSharedPtr host, HealthTransition) {
-      // If the host is ejected by outlier detection and active health check succeeds,
-      // we should treat this host as healthy.
-      if (!host->healthFlagGet(Host::HealthFlag::FAILED_ACTIVE_HC) &&
-          host->healthFlagGet(Host::HealthFlag::FAILED_OUTLIER_CHECK)) {
-        host->healthFlagClear(Host::HealthFlag::FAILED_OUTLIER_CHECK);
-        unejectHost(host);
-      }
-    });
+    cluster.healthChecker()->addHostCheckCompleteCb(
+        [this](HostSharedPtr host, HealthTransition, HealthState current_check_result) {
+          // If the host is ejected by outlier detection and active health check succeeds,
+          // we should treat this host as healthy.
+          if (current_check_result == HealthState::Healthy &&
+              !host->healthFlagGet(Host::HealthFlag::FAILED_ACTIVE_HC) &&
+              host->healthFlagGet(Host::HealthFlag::FAILED_OUTLIER_CHECK)) {
+            host->healthFlagClear(Host::HealthFlag::FAILED_OUTLIER_CHECK);
+            unejectHost(host);
+          }
+        });
   }
   member_update_cb_ = cluster.prioritySet().addMemberUpdateCb(
-      [this](const HostVector& hosts_added, const HostVector& hosts_removed) -> void {
+      [this](const HostVector& hosts_added, const HostVector& hosts_removed) -> absl::Status {
         for (const HostSharedPtr& host : hosts_added) {
           addHostMonitor(host);
         }
@@ -334,6 +338,7 @@ void DetectorImpl::initialize(Cluster& cluster) {
 
           host_monitors_.erase(host);
         }
+        return absl::OkStatus();
       });
 
   armIntervalTimer();
@@ -477,7 +482,7 @@ void DetectorImpl::ejectHost(HostSharedPtr host,
   // Note this is not currently checked per-priority level, so it is possible
   // for outlier detection to eject all hosts at any given priority level.
   bool should_eject = (ejected_percent <= max_ejection_percent);
-  if (!Runtime::runtimeFeatureEnabled("envoy.reloadable_features.check_mep_on_first_eject")) {
+  if (config_.alwaysEjectOneHost()) {
     should_eject = (ejections_active_helper_.value() == 0) || should_eject;
   }
   if (should_eject) {

@@ -6,6 +6,7 @@
 #include <list>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <string>
 #include <vector>
 
@@ -45,7 +46,6 @@
 #include "source/common/http/utility.h"
 #include "source/common/local_reply/local_reply.h"
 #include "source/common/network/proxy_protocol_filter_state.h"
-#include "source/common/router/scoped_rds.h"
 #include "source/common/stream_info/stream_info_impl.h"
 #include "source/common/tracing/http_tracer_impl.h"
 
@@ -63,7 +63,8 @@ class ConnectionManagerImpl : Logger::Loggable<Logger::Id::http>,
                               public Network::ConnectionCallbacks,
                               public Http::ApiListener {
 public:
-  ConnectionManagerImpl(ConnectionManagerConfig& config, const Network::DrainDecision& drain_close,
+  ConnectionManagerImpl(ConnectionManagerConfigSharedPtr config,
+                        const Network::DrainDecision& drain_close,
                         Random::RandomGenerator& random_generator, Http::Context& http_context,
                         Runtime::Loader& runtime, const LocalInfo::LocalInfo& local_info,
                         Upstream::ClusterManager& cluster_manager,
@@ -126,43 +127,11 @@ public:
   // prematurely closed.
   static const absl::string_view PrematureResetMinStreamLifetimeSecondsKey;
   static const absl::string_view MaxRequestsPerIoCycle;
+  static const absl::string_view OptionallyDelayClose;
 
 private:
   struct ActiveStream;
   class MobileConnectionManagerImpl;
-
-  class RdsRouteConfigUpdateRequester {
-  public:
-    RdsRouteConfigUpdateRequester(Router::RouteConfigProvider* route_config_provider,
-                                  ActiveStream& parent)
-        : route_config_provider_(route_config_provider), parent_(parent) {}
-
-    RdsRouteConfigUpdateRequester(Config::ConfigProvider* scoped_route_config_provider,
-                                  OptRef<const Router::ScopeKeyBuilder> scope_key_builder,
-                                  ActiveStream& parent)
-        // Expect the dynamic cast to succeed because only ScopedRdsConfigProvider is fully
-        // implemented. Inline provider will be cast to nullptr here but it is not full implemented
-        // and can't not be used at this point. Should change this implementation if we have a
-        // functional inline scope route provider in the future.
-        : scoped_route_config_provider_(
-              dynamic_cast<Router::ScopedRdsConfigProvider*>(scoped_route_config_provider)),
-          scope_key_builder_(scope_key_builder), parent_(parent) {}
-
-    void
-    requestRouteConfigUpdate(Http::RouteConfigUpdatedCallbackSharedPtr route_config_updated_cb);
-    void requestVhdsUpdate(const std::string& host_header,
-                           Event::Dispatcher& thread_local_dispatcher,
-                           Http::RouteConfigUpdatedCallbackSharedPtr route_config_updated_cb);
-    void requestSrdsUpdate(Router::ScopeKeyPtr scope_key,
-                           Event::Dispatcher& thread_local_dispatcher,
-                           Http::RouteConfigUpdatedCallbackSharedPtr route_config_updated_cb);
-
-  private:
-    Router::RouteConfigProvider* route_config_provider_;
-    Router::ScopedRdsConfigProvider* scoped_route_config_provider_;
-    OptRef<const Router::ScopeKeyBuilder> scope_key_builder_;
-    ActiveStream& parent_;
-  };
 
   /**
    * Wraps a single active stream on the connection. These are either full request/response pairs
@@ -176,9 +145,18 @@ private:
                               public Tracing::Config,
                               public ScopeTrackedObject,
                               public FilterManagerCallbacks,
-                              public DownstreamStreamFilterCallbacks {
+                              public DownstreamStreamFilterCallbacks,
+                              public RouteCache {
     ActiveStream(ConnectionManagerImpl& connection_manager, uint32_t buffer_limit,
                  Buffer::BufferMemoryAccountSharedPtr account);
+
+    // Event::DeferredDeletable
+    void deleteIsPending() override {
+      // The stream should not be accessed once deferred delete has been called.
+      still_alive_.reset();
+    }
+
+    void log(AccessLog::AccessLogType type);
     void completeRequest();
 
     const Network::Connection* connection();
@@ -198,8 +176,8 @@ private:
     void decodeData(Buffer::Instance& data, bool end_stream) override;
     void decodeMetadata(MetadataMapPtr&&) override;
 
-    // Mark that the last downstream byte is received, and the downstream stream is complete.
-    void maybeEndDecode(bool end_stream);
+    // Record the timestamp of last downstream byte is received.
+    void maybeRecordLastByteReceived(bool end_stream);
 
     // Http::RequestDecoder
     void decodeHeaders(RequestHeaderMapSharedPtr&& headers, bool end_stream) override;
@@ -212,7 +190,19 @@ private:
       return filter_manager_.sendLocalReply(code, body, modify_headers, grpc_status, details);
     }
     std::list<AccessLog::InstanceSharedPtr> accessLogHandlers() override {
-      return filter_manager_.accessLogHandlers();
+      std::list<AccessLog::InstanceSharedPtr> combined_log_handlers(
+          filter_manager_.accessLogHandlers());
+      std::list<AccessLog::InstanceSharedPtr> config_log_handlers_(
+          connection_manager_.config_->accessLogs());
+      if (!Runtime::runtimeFeatureEnabled(
+              "envoy.reloadable_features.filter_access_loggers_first")) {
+        combined_log_handlers.insert(combined_log_handlers.begin(), config_log_handlers_.begin(),
+                                     config_log_handlers_.end());
+      } else {
+        combined_log_handlers.insert(combined_log_handlers.end(), config_log_handlers_.begin(),
+                                     config_log_handlers_.end());
+      }
+      return combined_log_handlers;
     }
     // Hand off headers/trailers and stream info to the codec's response encoder, for logging later
     // (i.e. possibly after this stream has been destroyed).
@@ -227,6 +217,9 @@ private:
     }
 
     // ScopeTrackedObject
+    OptRef<const StreamInfo::StreamInfo> trackedStream() const override {
+      return filter_manager_.trackedStream();
+    }
     void dumpState(std::ostream& os, int indent_level = 0) const override {
       const char* spaces = spacesForLevel(indent_level);
       os << spaces << "ActiveStream " << this << DUMP_MEMBER(stream_id_);
@@ -301,6 +294,7 @@ private:
     OptRef<const Tracing::Config> tracingConfig() const override;
     const ScopeTrackedObject& scope() override;
     OptRef<DownstreamStreamFilterCallbacks> downstreamCallbacks() override { return *this; }
+    bool isHalfCloseEnabled() override { return connection_manager_.allow_upstream_half_close_; }
 
     // DownstreamStreamFilterCallbacks
     void setRoute(Router::RouteConstSharedPtr route) override;
@@ -319,12 +313,8 @@ private:
     void blockRouteCache();
     // Return true if the cached route is blocked.
     bool routeCacheBlocked() const {
-      ENVOY_BUG(!route_cache_blocked_,
-                "Should never try to refresh or clear the route cache when "
-                "it is blocked! To temporarily ignore this new constraint, "
-                "set runtime flag "
-                "`envoy.reloadable_features.prohibit_route_refresh_after_response_headers_sent` "
-                "to `false`");
+      ENVOY_BUG(!route_cache_blocked_, "Should never try to refresh or clear the route cache when "
+                                       "it is blocked!");
       return route_cache_blocked_;
     }
 
@@ -335,7 +325,6 @@ private:
     // not found, snapped_route_config_ is set to Router::NullConfigImpl.
     void snapScopedRouteConfig();
 
-    void refreshCachedRoute();
     void refreshCachedRoute(const Router::RouteCallback& cb);
 
     void refreshCachedTracingCustomTags();
@@ -349,7 +338,8 @@ private:
           : codec_saw_local_complete_(false), codec_encode_complete_(false),
             on_reset_stream_called_(false), is_zombie_stream_(false), successful_upgrade_(false),
             is_internally_destroyed_(false), is_internally_created_(false), is_tunneling_(false),
-            decorated_propagate_(true), deferred_to_next_io_iteration_(false) {}
+            decorated_propagate_(true), deferred_to_next_io_iteration_(false),
+            deferred_end_stream_(false) {}
 
       // It's possibly for the codec to see the completed response but not fully
       // encode it.
@@ -397,7 +387,12 @@ private:
     void onRequestHeaderTimeout();
     // Per-stream alive duration reached.
     void onStreamMaxDurationReached();
-    bool hasCachedRoute() { return cached_route_.has_value() && cached_route_.value(); }
+
+    // RouteCache
+    bool hasCachedRoute() const override {
+      return cached_route_.has_value() && cached_route_.value();
+    }
+    void refreshCachedRoute() override;
 
     // Return local port of the connection.
     uint32_t localPort();
@@ -427,7 +422,7 @@ private:
     //    harmonize this behavior with H/1.
     // 3. If the `stream_error_on_invalid_http_message` is set to `false` (it is by default) in the
     // HTTP connection manager configuration, then the entire connection is closed.
-    bool validateTrailers();
+    bool validateTrailers(RequestTrailerMap& trailers);
 
     std::weak_ptr<bool> stillAlive() { return {still_alive_}; }
 
@@ -476,8 +471,6 @@ private:
     std::chrono::milliseconds idle_timeout_ms_{};
     State state_;
 
-    const bool expand_agnostic_stream_lifetime_;
-
     // Snapshot of the route configuration at the time of request is started. This is used to ensure
     // that the same route configuration is used throughout the lifetime of the request. This
     // snapshot will be cleared when the cached route is blocked. Because after that we will not
@@ -508,7 +501,7 @@ private:
 
     absl::optional<Upstream::ClusterInfoConstSharedPtr> cached_cluster_info_;
     const std::string* decorated_operation_{nullptr};
-    std::unique_ptr<RdsRouteConfigUpdateRequester> route_config_update_requester_;
+    absl::optional<std::unique_ptr<RouteConfigUpdateRequester>> route_config_update_requester_;
     std::unique_ptr<Tracing::CustomTagMap> tracing_custom_tags_{nullptr};
     Http::ServerHeaderValidatorPtr header_validator_;
 
@@ -526,6 +519,8 @@ private:
 
     std::shared_ptr<bool> still_alive_ = std::make_shared<bool>(true);
     std::unique_ptr<Buffer::OwnedImpl> deferred_data_;
+    std::queue<MetadataMapPtr> deferred_metadata_;
+    RequestTrailerMapPtr deferred_request_trailers_;
   };
 
   using ActiveStreamPtr = std::unique_ptr<ActiveStream>;
@@ -579,19 +574,19 @@ private:
    */
   void doEndStream(ActiveStream& stream, bool check_for_deferred_close = true);
 
-  void resetAllStreams(absl::optional<StreamInfo::ResponseFlag> response_flag,
+  void resetAllStreams(absl::optional<StreamInfo::CoreResponseFlag> response_flag,
                        absl::string_view details);
   void onIdleTimeout();
   void onConnectionDurationTimeout();
   void onDrainTimeout();
   void startDrainSequence();
-  Tracing::Tracer& tracer() { return *config_.tracer(); }
+  Tracing::Tracer& tracer() { return *config_->tracer(); }
   void handleCodecErrorImpl(absl::string_view error, absl::string_view details,
-                            StreamInfo::ResponseFlag response_flag);
+                            StreamInfo::CoreResponseFlag response_flag);
   void handleCodecError(absl::string_view error);
   void handleCodecOverloadError(absl::string_view error);
   void doConnectionClose(absl::optional<Network::ConnectionCloseType> close_type,
-                         absl::optional<StreamInfo::ResponseFlag> response_flag,
+                         absl::optional<StreamInfo::CoreResponseFlag> response_flag,
                          absl::string_view details);
   // Returns true if a RST_STREAM for the given stream is premature. Premature
   // means the RST_STREAM arrived before response headers were sent and than
@@ -608,7 +603,7 @@ private:
 
   enum class DrainState { NotDraining, Draining, Closing };
 
-  ConnectionManagerConfig& config_;
+  ConnectionManagerConfigSharedPtr config_;
   ConnectionManagerStats& stats_; // We store a reference here to avoid an extra stats() call on
                                   // the config in the hot path.
   ServerConnectionPtr codec_;
@@ -624,6 +619,8 @@ private:
   // A connection duration timer. Armed during handling new connection if enabled in config.
   Event::TimerPtr connection_duration_timer_;
   Event::TimerPtr drain_timer_;
+  // When set to true, add Connection:close response header to nudge downstream client to reconnect.
+  bool soft_drain_http1_{false};
   Random::RandomGenerator& random_generator_;
   Runtime::Loader& runtime_;
   const LocalInfo::LocalInfo& local_info_;
@@ -634,6 +631,7 @@ private:
   Server::OverloadManager& overload_manager_;
   Server::ThreadLocalOverloadState& overload_state_;
   Server::LoadShedPoint* accept_new_http_stream_{nullptr};
+  Server::LoadShedPoint* hcm_ondata_creating_codec_{nullptr};
   // References into the overload manager thread local state map. Using these lets us avoid a
   // map lookup in the hot path of processing each request.
   const Server::OverloadActionState& overload_stop_accepting_requests_ref_;
@@ -656,7 +654,17 @@ private:
   const uint32_t max_requests_during_dispatch_{UINT32_MAX};
   Event::SchedulableCallbackPtr deferred_request_processing_callback_;
 
-  const bool refresh_rtt_after_request_{};
+  // If independent half-close is enabled and the upstream protocol is either HTTP/2 or HTTP/3
+  // protocols the stream is destroyed after both request and response are complete i.e. reach their
+  // respective end-of-stream, by receiving trailers or the header/body with end-stream set in both
+  // directions AND response has success (2xx) status code.
+  //
+  // For HTTP/1 upstream protocol or if independent half-close is disabled the stream is destroyed
+  // when the response is complete and reaches its end-of-stream, i.e. when trailers or the response
+  // header/body with end-stream set are received, even if the request has not yet completed. If
+  // request was incomplete at response completion, the stream is reset.
+
+  const bool allow_upstream_half_close_{};
 };
 
 } // namespace Http

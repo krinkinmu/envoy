@@ -31,6 +31,10 @@ MATCHER_P(HasNoHeader, key, absl::StrFormat("Headers have no value for \"%s\"", 
   return arg.get(::Envoy::Http::LowerCaseString(std::string(key))).empty();
 }
 
+MATCHER_P(HasHeader, key, absl::StrFormat("There exists a header for \"%s\"", key)) {
+  return !arg.get(::Envoy::Http::LowerCaseString(std::string(key))).empty();
+}
+
 MATCHER_P2(SingleHeaderValueIs, key, value,
            absl::StrFormat("Header \"%s\" equals \"%s\"", key, value)) {
   const auto hdr = arg.get(::Envoy::Http::LowerCaseString(std::string(key)));
@@ -50,6 +54,8 @@ MATCHER_P2(SingleProtoHeaderValueIs, key, value,
   return false;
 }
 
+envoy::config::core::v3::HeaderValue makeHeaderValue(const std::string& key,
+                                                     const std::string& value);
 } // namespace ExternalProcessing
 } // namespace HttpFilters
 } // namespace Extensions

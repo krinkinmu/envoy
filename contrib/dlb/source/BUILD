@@ -15,7 +15,7 @@ envoy_contrib_package()
 
 make(
     name = "dlb",
-    includes = [],
+    env = {"DLB_DISABLE_DOMAIN_SERVER": "TRUE"},
     lib_source = "@intel_dlb//:libdlb",
     out_static_libs = ["libdlb.a"],
     postfix_script = "mv libdlb.a $INSTALLDIR/lib && rm -rf $INSTALLDIR/include && mkdir -p $INSTALLDIR/include && cp -L *.h $INSTALLDIR/include",
@@ -26,9 +26,10 @@ make(
 
 envoy_cc_contrib_extension(
     name = "connection_balancer",
-    srcs = [
-        "connection_balancer_impl.cc",
-    ],
+    srcs = select({
+        "//bazel:linux_x86_64": ["connection_balancer_impl.cc"],
+        "//conditions:default": [],
+    }),
     hdrs = ["connection_balancer_impl.h"],
     defines = select({
         "//bazel:linux_x86_64": [],
@@ -42,9 +43,9 @@ envoy_cc_contrib_extension(
         "//envoy/server:factory_context_interface",
         "//envoy/server:filter_config_interface",
         "//source/common/common:logger_lib",
+        "//source/common/listener_manager:active_tcp_listener",
         "//source/common/network:connection_balancer_lib",
         "//source/common/protobuf:utility_lib",
-        "//source/extensions/listener_managers/listener_manager:active_tcp_listener",
         "@envoy_api//contrib/envoy/extensions/network/connection_balance/dlb/v3alpha:pkg_cc_proto",
     ] + select({
         "//bazel:linux_x86_64": [

@@ -39,13 +39,14 @@
 #include "test/mocks/http/header_validator.h"
 #include "test/mocks/protobuf/mocks.h"
 #include "test/mocks/server/instance.h"
+#include "test/mocks/server/listener_factory_context.h"
 
 #if defined(ENVOY_ENABLE_QUIC)
 #include "source/common/quic/active_quic_listener.h"
 #include "source/common/quic/quic_stat_names.h"
 #endif
 
-#include "source/extensions/listener_managers/listener_manager/active_raw_udp_listener_config.h"
+#include "source/common/listener_manager/active_raw_udp_listener_config.h"
 
 #include "test/mocks/common.h"
 #include "test/mocks/runtime/mocks.h"
@@ -198,7 +199,7 @@ public:
     {
       absl::MutexLock lock(&lock_);
       last_body_size = body_.length();
-      if (!grpc_decoder_.decode(body_, decoded_grpc_frames_)) {
+      if (!grpc_decoder_.decode(body_, decoded_grpc_frames_).ok()) {
         return testing::AssertionFailure()
                << "Couldn't decode gRPC data frame: " << body_.toString();
       }
@@ -210,7 +211,7 @@ public:
       }
       {
         absl::MutexLock lock(&lock_);
-        if (!grpc_decoder_.decode(body_, decoded_grpc_frames_)) {
+        if (!grpc_decoder_.decode(body_, decoded_grpc_frames_).ok()) {
           return testing::AssertionFailure()
                  << "Couldn't decode gRPC data frame: " << body_.toString();
         }
@@ -519,6 +520,7 @@ public:
   ABSL_MUST_USE_RESULT AssertionResult postWriteRawData(std::string data);
 
   Http::ServerHeaderValidatorPtr makeHeaderValidator();
+  Http::CodecType type() const { return type_; }
 
 private:
   struct ReadFilter : public Network::ReadFilterBaseImpl {
@@ -638,11 +640,12 @@ struct FakeUpstreamConfig {
   };
 
   FakeUpstreamConfig(Event::TestTimeSystem& time_system) : time_system_(time_system) {
-    http2_options_ = ::Envoy::Http2::Utility::initializeAndValidateOptions(http2_options_);
+    http2_options_ = ::Envoy::Http2::Utility::initializeAndValidateOptions(http2_options_).value();
     // Legacy options which are always set.
     http2_options_.set_allow_connect(true);
     http2_options_.set_allow_metadata(true);
     http3_options_.set_allow_extended_connect(true);
+    http3_options_.set_allow_metadata(true);
   }
 
   Event::TestTimeSystem& time_system_;
@@ -723,8 +726,7 @@ public:
   }
 
   // Wait for one of the upstreams to receive a connection
-  ABSL_MUST_USE_RESULT
-  static testing::AssertionResult
+  static absl::StatusOr<int>
   waitForHttpConnection(Event::Dispatcher& client_dispatcher,
                         std::vector<std::unique_ptr<FakeUpstream>>& upstreams,
                         FakeHttpConnectionPtr& connection,
@@ -787,6 +789,8 @@ public:
   Event::DispatcherPtr& dispatcher() { return dispatcher_; }
   absl::Mutex& lock() { return lock_; }
 
+  void runOnDispatcherThread(std::function<void()> cb);
+
 protected:
   const FakeUpstreamConfig& config() const { return config_; }
 
@@ -810,7 +814,7 @@ private:
     Network::SocketSharedPtr getListenSocket(uint32_t) override { return socket_; }
     Network::ListenSocketFactoryPtr clone() const override { return nullptr; }
     void closeAllSockets() override {}
-    void doFinalPreWorkerInit() override;
+    absl::Status doFinalPreWorkerInit() override;
 
   private:
     Network::SocketSharedPtr socket_;
@@ -856,12 +860,18 @@ private:
     };
 
     FakeListener(FakeUpstream& parent, bool is_quic = false)
-        : parent_(parent), name_("fake_upstream"), init_manager_(nullptr) {
+        : parent_(parent), name_("fake_upstream"), init_manager_(nullptr),
+          listener_info_(std::make_shared<testing::NiceMock<Network::MockListenerInfo>>()) {
       if (is_quic) {
 #if defined(ENVOY_ENABLE_QUIC)
+        if (context_ == nullptr) {
+          // Only initialize this when needed to avoid slowing down non-QUIC integration tests.
+          context_ = std::make_unique<
+              testing::NiceMock<Server::Configuration::MockListenerFactoryContext>>();
+        }
         udp_listener_config_.listener_factory_ = std::make_unique<Quic::ActiveQuicListenerFactory>(
             parent_.quic_options_, 1, parent_.quic_stat_names_, parent_.validation_visitor_,
-            absl::nullopt);
+            *context_);
         // Initialize QUICHE flags.
         quiche::FlagRegistry::getInstance();
 #else
@@ -895,11 +905,12 @@ private:
     Network::ConnectionBalancer& connectionBalancer(const Network::Address::Instance&) override {
       return connection_balancer_;
     }
-    envoy::config::core::v3::TrafficDirection direction() const override {
-      return envoy::config::core::v3::UNSPECIFIED;
-    }
+    bool shouldBypassOverloadManager() const override { return false; }
     const std::vector<AccessLog::InstanceSharedPtr>& accessLogs() const override {
       return empty_access_logs_;
+    }
+    const Network::ListenerInfoConstSharedPtr& listenerInfo() const override {
+      return listener_info_;
     }
     ResourceLimit& openConnections() override { return connection_resource_; }
     uint32_t tcpBacklogSize() const override { return ENVOY_TCP_BACKLOG_SIZE; }
@@ -920,6 +931,8 @@ private:
     BasicResourceLimitImpl connection_resource_;
     const std::vector<AccessLog::InstanceSharedPtr> empty_access_logs_;
     std::unique_ptr<Init::Manager> init_manager_;
+    const Network::ListenerInfoConstSharedPtr listener_info_;
+    std::unique_ptr<Server::Configuration::MockListenerFactoryContext> context_;
   };
 
   void threadRoutine();
@@ -945,6 +958,7 @@ private:
   Network::ConnectionHandlerPtr handler_;
   std::list<SharedConnectionWrapperPtr> new_connections_ ABSL_GUARDED_BY(lock_);
   testing::NiceMock<Runtime::MockLoader> runtime_;
+  testing::NiceMock<Random::MockRandomGenerator> random_;
 
   // When a QueuedConnectionWrapper is popped from new_connections_, ownership is transferred to
   // consumed_connections_. This allows later the Connection destruction (when the FakeUpstream is
@@ -958,6 +972,7 @@ private:
   // Setting this true disables all events and does not re-enable as the above does.
   bool disable_and_do_not_enable_{};
   const bool enable_half_close_;
+  testing::NiceMock<ProtobufMessage::MockValidationVisitor> validation_visitor_;
   FakeListener listener_;
   const Network::FilterChainSharedPtr filter_chain_;
   std::list<Network::UdpRecvData> received_datagrams_ ABSL_GUARDED_BY(lock_);
@@ -965,7 +980,6 @@ private:
   Http::Http1::CodecStats::AtomicPtr http1_codec_stats_;
   Http::Http2::CodecStats::AtomicPtr http2_codec_stats_;
   Http::Http3::CodecStats::AtomicPtr http3_codec_stats_;
-  testing::NiceMock<ProtobufMessage::MockValidationVisitor> validation_visitor_;
 #ifdef ENVOY_ENABLE_QUIC
   Quic::QuicStatNames quic_stat_names_ = Quic::QuicStatNames(stats_store_.symbolTable());
 #endif

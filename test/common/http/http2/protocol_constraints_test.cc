@@ -1,6 +1,7 @@
 #include "source/common/common/utility.h"
 #include "source/common/http/http2/protocol_constraints.h"
 
+#include "test/common/memory/memory_test_utility.h"
 #include "test/common/stats/stat_test_utility.h"
 #include "test/test_common/utility.h"
 
@@ -94,13 +95,13 @@ TEST_F(ProtocolConstraintsTest, OutboundFrameFloodStatusIsIdempotent) {
 TEST_F(ProtocolConstraintsTest, InboundZeroLenData) {
   options_.mutable_max_consecutive_inbound_frames_with_empty_payload()->set_value(2);
   ProtocolConstraints constraints(http2CodecStats(), options_);
-  uint8_t type = NGHTTP2_DATA;
-  size_t length = 0;
-  uint8_t flags = 0;
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(
-      isInboundFramesWithEmptyPayloadError(constraints.trackInboundFrames(length, type, flags, 0)));
+  const uint8_t type = NGHTTP2_DATA;
+  const bool end_stream = false;
+  const bool is_empty = true;
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(isInboundFramesWithEmptyPayloadError(
+      constraints.trackInboundFrame(type, end_stream, is_empty)));
   EXPECT_TRUE(isInboundFramesWithEmptyPayloadError(constraints.status()));
   EXPECT_EQ(1, stats_store_.counter("http2.inbound_empty_frames_flood").value());
 }
@@ -113,13 +114,13 @@ TEST_F(ProtocolConstraintsTest, OutboundAndInboundFrameFloodStatusIsIdempotent) 
   options_.mutable_max_consecutive_inbound_frames_with_empty_payload()->set_value(2);
   ProtocolConstraints constraints(http2CodecStats(), options_);
   // First trigger inbound frame flood
-  uint8_t type = NGHTTP2_DATA;
-  size_t length = 0;
-  uint8_t flags = 0;
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(
-      isInboundFramesWithEmptyPayloadError(constraints.trackInboundFrames(length, type, flags, 0)));
+  const uint8_t type = NGHTTP2_DATA;
+  const bool end_stream = false;
+  const bool is_empty = true;
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(isInboundFramesWithEmptyPayloadError(
+      constraints.trackInboundFrame(type, end_stream, is_empty)));
 
   // Then trigger outbound control flood
   constraints.incrementOutboundFrameCount(true);
@@ -133,13 +134,13 @@ TEST_F(ProtocolConstraintsTest, OutboundAndInboundFrameFloodStatusIsIdempotent) 
 TEST_F(ProtocolConstraintsTest, InboundZeroLenDataWithPadding) {
   options_.mutable_max_consecutive_inbound_frames_with_empty_payload()->set_value(2);
   ProtocolConstraints constraints(http2CodecStats(), options_);
-  uint8_t type = NGHTTP2_DATA;
-  size_t length = 8;
-  uint8_t flags = 0;
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 8).ok());
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 8).ok());
-  EXPECT_TRUE(
-      isInboundFramesWithEmptyPayloadError(constraints.trackInboundFrames(length, type, flags, 8)));
+  const uint8_t type = NGHTTP2_DATA;
+  const bool end_stream = false;
+  const bool is_empty = true;
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(isInboundFramesWithEmptyPayloadError(
+      constraints.trackInboundFrame(type, end_stream, is_empty)));
   EXPECT_TRUE(isInboundFramesWithEmptyPayloadError(constraints.status()));
   EXPECT_EQ(1, stats_store_.counter("http2.inbound_empty_frames_flood").value());
 }
@@ -147,18 +148,18 @@ TEST_F(ProtocolConstraintsTest, InboundZeroLenDataWithPadding) {
 TEST_F(ProtocolConstraintsTest, InboundZeroLenDataEndStreamResetCounter) {
   options_.mutable_max_consecutive_inbound_frames_with_empty_payload()->set_value(2);
   ProtocolConstraints constraints(http2CodecStats(), options_);
-  uint8_t type = NGHTTP2_DATA;
-  size_t length = 0;
-  uint8_t flags = 0;
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  flags = NGHTTP2_FLAG_END_STREAM;
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  flags = 0;
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(
-      isInboundFramesWithEmptyPayloadError(constraints.trackInboundFrames(length, type, flags, 0)));
+  const uint8_t type = NGHTTP2_DATA;
+  const bool is_empty = true;
+  bool end_stream = false;
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  end_stream = true;
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  end_stream = false;
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(isInboundFramesWithEmptyPayloadError(
+      constraints.trackInboundFrame(type, end_stream, is_empty)));
   EXPECT_TRUE(isInboundFramesWithEmptyPayloadError(constraints.status()));
   EXPECT_EQ(1, stats_store_.counter("http2.inbound_empty_frames_flood").value());
 }
@@ -169,14 +170,14 @@ TEST_F(ProtocolConstraintsTest, Priority) {
   // Create one stream
   constraints.incrementOpenedStreamCount();
 
-  size_t length = 5;
-  uint8_t type = NGHTTP2_PRIORITY;
-  uint8_t flags = 0;
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
-  EXPECT_TRUE(isBufferFloodError(constraints.trackInboundFrames(length, type, flags, 0)));
+  const uint8_t type = NGHTTP2_PRIORITY;
+  const bool end_stream = false;
+  const bool is_empty = false;
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
+  EXPECT_TRUE(isBufferFloodError(constraints.trackInboundFrame(type, end_stream, is_empty)));
   EXPECT_TRUE(isBufferFloodError(constraints.status()));
   EXPECT_EQ("Too many PRIORITY frames", constraints.status().message());
   EXPECT_EQ(1, stats_store_.counter("http2.inbound_priority_frames_flood").value());
@@ -195,13 +196,13 @@ TEST_F(ProtocolConstraintsTest, WindowUpdate) {
   // max_inbound_window_update_frames_per_data_frame_sent_ * outbound_data_frames_`
   // formula 5 + 2 * (1 + 2 * 2) = 15 WINDOW_UPDATE frames should NOT fail constraint
   // check, but 16th should.
-  size_t length = 4;
-  uint8_t type = NGHTTP2_WINDOW_UPDATE;
-  uint8_t flags = 0;
+  const uint8_t type = NGHTTP2_WINDOW_UPDATE;
+  const bool end_stream = false;
+  const bool is_empty = false;
   for (uint32_t i = 0; i < 15; ++i) {
-    EXPECT_TRUE(constraints.trackInboundFrames(length, type, flags, 0).ok());
+    EXPECT_TRUE(constraints.trackInboundFrame(type, end_stream, is_empty).ok());
   }
-  EXPECT_TRUE(isBufferFloodError(constraints.trackInboundFrames(length, type, flags, 0)));
+  EXPECT_TRUE(isBufferFloodError(constraints.trackInboundFrame(type, end_stream, is_empty)));
   EXPECT_TRUE(isBufferFloodError(constraints.status()));
   EXPECT_EQ("Too many WINDOW_UPDATE frames", constraints.status().message());
   EXPECT_EQ(1, stats_store_.counter("http2.inbound_window_update_frames_flood").value());
@@ -212,9 +213,9 @@ TEST_F(ProtocolConstraintsTest, DumpsStateWithoutAllocatingMemory) {
   OutputBufferStream ostream{buffer.data(), buffer.size()};
   ProtocolConstraints constraints(http2CodecStats(), options_);
 
-  Stats::TestUtil::MemoryTest memory_test;
+  Memory::TestUtil::MemoryTest memory_test;
   constraints.dumpState(ostream, 0);
-  EXPECT_EQ(memory_test.consumedBytes(), 0);
+  EXPECT_MEMORY_EQ(memory_test.consumedBytes(), 0);
   EXPECT_THAT(ostream.contents(), HasSubstr("ProtocolConstraints "));
   EXPECT_THAT(
       ostream.contents(),

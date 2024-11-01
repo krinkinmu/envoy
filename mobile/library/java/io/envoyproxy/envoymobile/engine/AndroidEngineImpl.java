@@ -1,6 +1,8 @@
 package io.envoyproxy.envoymobile.engine;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+
 import io.envoyproxy.envoymobile.engine.types.EnvoyEventTracker;
 import io.envoyproxy.envoymobile.engine.types.EnvoyHTTPCallbacks;
 import io.envoyproxy.envoymobile.engine.types.EnvoyLogger;
@@ -15,6 +17,7 @@ import java.util.Map;
 /* Android-specific implementation of the `EnvoyEngine` interface. */
 public class AndroidEngineImpl implements EnvoyEngine {
   private final EnvoyEngine envoyEngine;
+  private final Context context;
 
   /**
    * @param runningCallback Called when the engine finishes its async startup and begins running.
@@ -22,11 +25,11 @@ public class AndroidEngineImpl implements EnvoyEngine {
   public AndroidEngineImpl(Context context, EnvoyOnEngineRunning runningCallback,
                            EnvoyLogger logger, EnvoyEventTracker eventTracker,
                            Boolean enableProxying) {
+    this.context = context;
     this.envoyEngine = new EnvoyEngineImpl(runningCallback, logger, eventTracker);
     if (ContextUtils.getApplicationContext() == null) {
       ContextUtils.initApplicationContext(context.getApplicationContext());
     }
-    AndroidJniLibrary.load(context);
     AndroidNetworkMonitor.load(context, envoyEngine);
     if (enableProxying) {
       AndroidProxyMonitor.load(context, envoyEngine);
@@ -34,9 +37,8 @@ public class AndroidEngineImpl implements EnvoyEngine {
   }
 
   @Override
-  public EnvoyHTTPStream startStream(EnvoyHTTPCallbacks callbacks, boolean explicitFlowControl,
-                                     long minDeliverySize) {
-    return envoyEngine.startStream(callbacks, explicitFlowControl, minDeliverySize);
+  public EnvoyHTTPStream startStream(EnvoyHTTPCallbacks callbacks, boolean explicitFlowControl) {
+    return envoyEngine.startStream(callbacks, explicitFlowControl);
   }
 
   @Override
@@ -45,23 +47,17 @@ public class AndroidEngineImpl implements EnvoyEngine {
   }
 
   @Override
-  public EnvoyStatus runWithYaml(String configurationYAML, String logLevel) {
-    return envoyEngine.runWithYaml(configurationYAML, logLevel);
-  }
-
-  @Override
   public EnvoyStatus runWithConfig(EnvoyConfiguration envoyConfiguration, String logLevel) {
+    if (envoyConfiguration.useCares) {
+      JniLibrary.initCares(
+          (ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE));
+    }
     return envoyEngine.runWithConfig(envoyConfiguration, logLevel);
   }
 
   @Override
   public void terminate() {
     envoyEngine.terminate();
-  }
-
-  @Override
-  public void flushStats() {
-    envoyEngine.flushStats();
   }
 
   @Override
@@ -85,8 +81,18 @@ public class AndroidEngineImpl implements EnvoyEngine {
   }
 
   @Override
-  public void setPreferredNetwork(EnvoyNetworkType network) {
-    envoyEngine.setPreferredNetwork(network);
+  public void onDefaultNetworkAvailable() {
+    envoyEngine.onDefaultNetworkAvailable();
+  }
+
+  @Override
+  public void onDefaultNetworkChanged(EnvoyNetworkType network) {
+    envoyEngine.onDefaultNetworkChanged(network);
+  }
+
+  @Override
+  public void onDefaultNetworkUnavailable() {
+    envoyEngine.onDefaultNetworkUnavailable();
   }
 
   public void setProxySettings(String host, int port) { envoyEngine.setProxySettings(host, port); }

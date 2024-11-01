@@ -30,6 +30,7 @@ These input functions are available for matching HTTP requests:
 * :ref:`Response header value <extension_envoy.matching.inputs.response_headers>`.
 * :ref:`Response trailer value <extension_envoy.matching.inputs.response_trailers>`.
 * :ref:`Query parameters value <extension_envoy.matching.inputs.query_params>`.
+* :ref:`Dynamic metadata <extension_envoy.matching.inputs.dynamic_metadata>`.
 
 .. _extension_category_envoy.matching.network.input:
 
@@ -48,12 +49,12 @@ These input functions are available for matching TCP connections and HTTP reques
 * :ref:`Direct source IP <extension_envoy.matching.inputs.direct_source_ip>`.
 * :ref:`Source type <extension_envoy.matching.inputs.source_type>`.
 * :ref:`Server name <extension_envoy.matching.inputs.server_name>`.
+* :ref:`Filter state <extension_envoy.matching.inputs.filter_state>`.
 
 These input functions are available for matching TCP connections:
 
 * :ref:`Transport protocol <extension_envoy.matching.inputs.transport_protocol>`.
 * :ref:`Application protocol <extension_envoy.matching.inputs.application_protocol>`.
-* :ref:`Filter state <extension_envoy.matching.inputs.filter_state>`.
 
 .. _extension_category_envoy.matching.ssl.input:
 
@@ -92,6 +93,8 @@ are available in some contexts:
 .. _extension_envoy.matching.matchers.cel_matcher:
 
   * CEL matching input matcher: :ref:`CEL input matcher <envoy_v3_api_msg_.xds.type.matcher.v3.CelMatcher>`.
+
+* Regex matching using :ref:`Hyperscan matcher <envoy_v3_api_msg_extensions.matching.input_matchers.hyperscan.v3alpha.Hyperscan>`.
 
 Matching actions
 ################

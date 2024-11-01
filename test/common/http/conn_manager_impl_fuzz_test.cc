@@ -94,11 +94,12 @@ public:
           callbacks.streamInfo().setResponseCodeDetails("");
         }));
     EXPECT_CALL(*encoder_filter_, setEncoderFilterCallbacks(_));
-    EXPECT_CALL(filter_factory_, createUpgradeFilterChain("WebSocket", _, _))
-        .WillRepeatedly(Invoke([&](absl::string_view, const Http::FilterChainFactory::UpgradeMap*,
-                                   FilterChainManager& manager) -> bool {
-          return filter_factory_.createFilterChain(manager);
-        }));
+    EXPECT_CALL(filter_factory_, createUpgradeFilterChain(_, _, _, _))
+        .WillRepeatedly(
+            Invoke([&](absl::string_view, const Http::FilterChainFactory::UpgradeMap*,
+                       FilterChainManager& manager, const Http::FilterChainOptions&) -> bool {
+              return filter_factory_.createFilterChain(manager);
+            }));
   }
 
   Http::ForwardClientCertType
@@ -152,6 +153,9 @@ public:
   absl::optional<std::chrono::milliseconds> maxConnectionDuration() const override {
     return max_connection_duration_;
   }
+  bool http1SafeMaxConnectionDuration() const override {
+    return http1_safe_max_connection_duration_;
+  }
   absl::optional<std::chrono::milliseconds> maxStreamDuration() const override {
     return max_stream_duration_;
   }
@@ -185,6 +189,7 @@ public:
     return server_transformation_;
   }
   const absl::optional<std::string>& schemeToSet() const override { return scheme_; }
+  bool shouldSchemeMatchUpstream() const override { return scheme_match_upstream_; }
   ConnectionManagerStats& stats() override { return stats_; }
   ConnectionManagerTracingStats& tracingStats() override { return tracing_stats_; }
   bool useRemoteAddress() const override { return use_remote_address_; }
@@ -239,6 +244,7 @@ public:
     // be changed too
     return nullptr;
   }
+  bool appendLocalOverload() const override { return false; }
   bool appendXForwardedPort() const override { return false; }
   bool addProxyProtocolConnectionState() const override { return true; }
 
@@ -264,6 +270,7 @@ public:
   HttpConnectionManagerProto::ServerHeaderTransformation server_transformation_{
       HttpConnectionManagerProto::OVERWRITE};
   absl::optional<std::string> scheme_;
+  bool scheme_match_upstream_{};
   Stats::IsolatedStoreImpl fake_stats_;
   ConnectionManagerStats stats_;
   ConnectionManagerTracingStats tracing_stats_;
@@ -272,6 +279,7 @@ public:
   uint32_t max_request_headers_count_{Http::DEFAULT_MAX_HEADERS_COUNT};
   absl::optional<std::chrono::milliseconds> idle_timeout_;
   absl::optional<std::chrono::milliseconds> max_connection_duration_;
+  bool http1_safe_max_connection_duration_{false};
   absl::optional<std::chrono::milliseconds> max_stream_duration_;
   std::chrono::milliseconds stream_idle_timeout_{};
   std::chrono::milliseconds request_timeout_{};
@@ -338,6 +346,11 @@ public:
           // If sendLocalReply is called:
           ON_CALL(encoder_, encodeHeaders(_, true))
               .WillByDefault(Invoke([this](const ResponseHeaderMap&, bool end_stream) -> void {
+                response_state_ =
+                    end_stream ? StreamState::Closed : StreamState::PendingDataOrTrailers;
+              }));
+          ON_CALL(encoder_, encodeData(_, true))
+              .WillByDefault(Invoke([this](const Buffer::Instance&, bool end_stream) -> void {
                 response_state_ =
                     end_stream ? StreamState::Closed : StreamState::PendingDataOrTrailers;
               }));
@@ -527,7 +540,7 @@ public:
         // Similarly, local replies should always contain this.
         const auto status = Utility::getResponseStatusOrNullopt(*headers);
         // The only 1xx header that may be provided to encodeHeaders() is a 101 upgrade,
-        // guaranteed by the codec parsers. See include/envoy/http/filter.h.
+        // guaranteed by the codec parsers. See envoy/http/filter.h.
         if (!status.has_value() || (CodeUtility::is1xx(status.value()) &&
                                     status.value() != enumToInt(Http::Code::SwitchingProtocols))) {
           headers->setReferenceKey(Headers::get().Status, "200");
@@ -594,15 +607,12 @@ using FuzzStreamPtr = std::unique_ptr<FuzzStream>;
 DEFINE_PROTO_FUZZER(const test::common::http::ConnManagerImplTestCase& input) {
   try {
     TestUtility::validate(input);
-  } catch (const ProtoValidationException& e) {
-    ENVOY_LOG_MISC(debug, "ProtoValidationException: {}", e.what());
-    return;
-  } catch (const Envoy::ProtobufMessage::DeprecatedProtoFieldException& e) {
-    ENVOY_LOG_MISC(debug, "DeprecatedProtoFieldException: {}", e.what());
+  } catch (const Envoy::EnvoyException& e) {
+    ENVOY_LOG_MISC(debug, "EnvoyException: {}", e.what());
     return;
   }
 
-  FuzzConfig config(input.forward_client_cert());
+  std::shared_ptr<FuzzConfig> config = std::make_shared<FuzzConfig>(input.forward_client_cert());
   NiceMock<Network::MockDrainDecision> drain_close;
   NiceMock<Random::MockRandomGenerator> random;
   Stats::SymbolTableImpl symbol_table;
@@ -627,7 +637,7 @@ DEFINE_PROTO_FUZZER(const test::common::http::ConnManagerImplTestCase& input) {
       std::make_shared<Network::Address::Ipv4Instance>("0.0.0.0"));
 
   ConnectionManagerImpl conn_manager(config, drain_close, random, http_context, runtime, local_info,
-                                     cluster_manager, overload_manager, config.time_system_);
+                                     cluster_manager, overload_manager, config->time_system_);
   conn_manager.initializeReadFilterCallbacks(filter_callbacks);
 
   std::vector<FuzzStreamPtr> streams;
@@ -642,7 +652,7 @@ DEFINE_PROTO_FUZZER(const test::common::http::ConnManagerImplTestCase& input) {
     switch (action.action_selector_case()) {
     case test::common::http::Action::kNewStream: {
       streams.emplace_back(new FuzzStream(
-          conn_manager, config,
+          conn_manager, *config,
           Fuzz::fromHeaders<TestRequestHeaderMapImpl>(action.new_stream().request_headers(),
                                                       /* ignore_headers =*/{}, {":authority"}),
           action.new_stream().status(), action.new_stream().end_stream()));

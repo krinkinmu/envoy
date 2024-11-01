@@ -420,16 +420,6 @@ config_setting(
 )
 
 config_setting(
-    name = "disable_envoy_mobile_request_compression",
-    values = {"define": "envoy_mobile_request_compression=disabled"},
-)
-
-config_setting(
-    name = "disable_envoy_mobile_stats_reporting",
-    values = {"define": "envoy_mobile_stats_reporting=disabled"},
-)
-
-config_setting(
     name = "disable_yaml",
     values = {"define": "envoy_yaml=disabled"},
 )
@@ -453,7 +443,7 @@ config_setting(
 
 config_setting(
     name = "disable_http_datagrams",
-    values = {"define": "enable_http_datagrams=disabled"},
+    values = {"define": "envoy_enable_http_datagrams=disabled"},
 )
 
 config_setting(
@@ -479,6 +469,11 @@ selects.config_setting_group(
         ":apple",
         ":disable_hot_restart_setting",
     ],
+)
+
+config_setting(
+    name = "disable_nghttp2",
+    values = {"define": "nghttp2=disabled"},
 )
 
 config_setting(
@@ -522,6 +517,11 @@ config_setting(
 )
 
 config_setting(
+    name = "enable_execution_context",
+    values = {"define": "execution_context=enabled"},
+)
+
+config_setting(
     name = "enable_perf_tracing",
     values = {"define": "perf_tracing=enabled"},
 )
@@ -544,18 +544,20 @@ config_setting(
     values = {"define": "boringssl=disabled"},
 )
 
+selects.config_setting_group(
+    name = "boringssl_fips_x86",
+    match_all = [
+        ":boringssl_fips",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
 config_setting(
     name = "zlib_ng",
     constraint_values = [
         "@platforms//os:linux",
     ],
     values = {"define": "zlib=ng"},
-)
-
-# TODO: consider converting WAVM VM support to an extension (https://github.com/envoyproxy/envoy/issues/12574)
-config_setting(
-    name = "wasm_wavm",
-    values = {"define": "wasm=wavm"},
 )
 
 config_setting(
@@ -738,6 +740,11 @@ alias(
     }),
 )
 
+config_setting(
+    name = "engflow_rbe",
+    define_values = {"engflow_rbe": "true"},
+)
+
 selects.config_setting_group(
     name = "apple",
     match_any = [
@@ -751,6 +758,15 @@ selects.config_setting_group(
         ":ios_i386",
         ":ios_sim_arm64",
         ":ios_x86_64",
+    ],
+)
+
+selects.config_setting_group(
+    name = "darwin_any",
+    match_any = [
+        ":darwin",
+        ":darwin_arm64",
+        ":darwin_x86_64",
     ],
 )
 

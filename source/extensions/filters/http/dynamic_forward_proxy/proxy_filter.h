@@ -38,7 +38,8 @@ class ProxyFilterConfig : Logger::Loggable<Logger::Id::forward_proxy> {
 public:
   ProxyFilterConfig(
       const envoy::extensions::filters::http::dynamic_forward_proxy::v3::FilterConfig& proto_config,
-      Extensions::Common::DynamicForwardProxy::DnsCacheManagerFactory& cache_manager_factory,
+      Extensions::Common::DynamicForwardProxy::DnsCacheSharedPtr&& cache,
+      Extensions::Common::DynamicForwardProxy::DnsCacheManagerSharedPtr&& cache_manager,
       Extensions::Common::DynamicForwardProxy::DFPClusterStoreFactory& cluster_store_factory,
       Server::Configuration::FactoryContext& context);
 
@@ -150,8 +151,8 @@ public:
 
 private:
   void addHostAddressToFilterState(const Network::Address::InstanceConstSharedPtr& address);
-  void onDnsResolutionFail();
-  bool isProxying();
+  void onDnsResolutionFail(absl::string_view details);
+  virtual bool isProxying();
 
   const ProxyFilterConfigSharedPtr config_;
   Upstream::ClusterInfoConstSharedPtr cluster_info_;

@@ -44,9 +44,11 @@ public:
   Upstream::HostDescriptionConstSharedPtr host() const override { return host_; }
 
   Network::SocketPtr createSocket(const Upstream::HostConstSharedPtr& host) {
-    return std::make_unique<Network::SocketImpl>(Network::Socket::Type::Datagram, host->address(),
-                                                 /*remote_address=*/nullptr,
-                                                 Network::SocketCreationOptions{});
+    auto ret = std::make_unique<Network::SocketImpl>(
+        Network::Socket::Type::Datagram, host->address(),
+        /*remote_address=*/nullptr, Network::SocketCreationOptions{});
+    RELEASE_ASSERT(ret->isOpen(), "Socket creation fail");
+    return ret;
   }
 
   bool valid() const override { return host_ != nullptr; }
@@ -72,6 +74,7 @@ public:
   void encodeTrailers(const Envoy::Http::RequestTrailerMap&) override {}
   void readDisable(bool) override {}
   void resetStream() override;
+  void enableTcpTunneling() override {}
   void setAccount(Buffer::BufferMemoryAccountSharedPtr) override {}
   const StreamInfo::BytesMeterSharedPtr& bytesMeter() override { return bytes_meter_; }
 
@@ -79,7 +82,8 @@ public:
   // Handles data received from the UDP Upstream.
   void processPacket(Network::Address::InstanceConstSharedPtr local_address,
                      Network::Address::InstanceConstSharedPtr peer_address,
-                     Buffer::InstancePtr buffer, MonotonicTime receive_time) override;
+                     Buffer::InstancePtr buffer, MonotonicTime receive_time, uint8_t tos,
+                     Buffer::RawSlice saved_cmsg) override;
   uint64_t maxDatagramSize() const override { return Network::DEFAULT_UDP_MAX_DATAGRAM_SIZE; }
   void onDatagramsDropped(uint32_t dropped) override {
     // TODO(https://github.com/envoyproxy/envoy/issues/23564): Add statistics for CONNECT-UDP
@@ -91,6 +95,10 @@ public:
     return Network::MAX_NUM_PACKETS_PER_EVENT_LOOP;
   }
   uint32_t numOfDroppedDatagrams() { return datagrams_dropped_; }
+  const Network::IoHandle::UdpSaveCmsgConfig& saveCmsgConfig() const override {
+    static const Network::IoHandle::UdpSaveCmsgConfig empty_config{};
+    return empty_config;
+  };
 
   // quiche::CapsuleParser::Visitor
   bool OnCapsule(const quiche::Capsule& capsule) override;

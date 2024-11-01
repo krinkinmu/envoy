@@ -61,6 +61,7 @@ class UpstreamCodecFilter;
  * There is some required communication between the UpstreamRequest and
  * UpstreamCodecFilter. This is accomplished via the UpstreamStreamFilterCallbacks
  * interface, with the UpstreamFilterManager acting as intermediary.
+ *
  */
 class UpstreamRequest : public Logger::Loggable<Logger::Id::router>,
                         public UpstreamToDownstream,
@@ -69,22 +70,22 @@ class UpstreamRequest : public Logger::Loggable<Logger::Id::router>,
                         public Event::DeferredDeletable {
 public:
   UpstreamRequest(RouterFilterInterface& parent, std::unique_ptr<GenericConnPool>&& conn_pool,
-                  bool can_send_early_data, bool can_use_http3);
+                  bool can_send_early_data, bool can_use_http3, bool enable_half_close);
   ~UpstreamRequest() override;
   void deleteIsPending() override { cleanUp(); }
 
   // To be called from the destructor, or prior to deferred delete.
   void cleanUp();
 
-  void acceptHeadersFromRouter(bool end_stream);
-  void acceptDataFromRouter(Buffer::Instance& data, bool end_stream);
+  virtual void acceptHeadersFromRouter(bool end_stream);
+  virtual void acceptDataFromRouter(Buffer::Instance& data, bool end_stream);
   void acceptTrailersFromRouter(Http::RequestTrailerMap& trailers);
   void acceptMetadataFromRouter(Http::MetadataMapPtr&& metadata_map_ptr);
 
-  void resetStream();
+  virtual void resetStream();
   void setupPerTryTimeout();
   void maybeEndDecode(bool end_stream);
-  void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host);
+  void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host, bool pool_success);
 
   // Http::StreamDecoder
   void decodeData(Buffer::Instance& data, bool end_stream) override;
@@ -231,7 +232,6 @@ private:
   // Keep small members (bools and enums) at the end of class, to reduce alignment overhead.
   // Tracks the number of times the flow of data from downstream has been disabled.
   uint32_t downstream_data_disabled_{};
-  bool calling_encode_headers_ : 1;
   bool upstream_canary_ : 1;
   bool router_sent_end_stream_ : 1;
   bool encode_trailers_ : 1;
@@ -255,7 +255,7 @@ private:
   bool had_upstream_ : 1;
   Http::ConnectionPool::Instance::StreamOptions stream_options_;
   bool grpc_rq_success_deferred_ : 1;
-  bool upstream_wait_for_response_headers_before_disabling_read_ : 1;
+  bool enable_half_close_ : 1;
 };
 
 class UpstreamRequestFilterManagerCallbacks : public Http::FilterManagerCallbacks,
@@ -343,10 +343,10 @@ public:
 
   // Unsupported functions.
   void recreateStream(StreamInfo::FilterStateSharedPtr) override {
-    IS_ENVOY_BUG("recreateStream called from upstream filter");
+    IS_ENVOY_BUG("recreateStream called from upstream HTTP filter");
   }
   void upgradeFilterChainCreated() override {
-    IS_ENVOY_BUG("upgradeFilterChainCreated called from upstream filter");
+    IS_ENVOY_BUG("upgradeFilterChainCreated called from upstream HTTP filter");
   }
   OptRef<UpstreamStreamFilterCallbacks> upstreamCallbacks() override { return {*this}; }
 
@@ -377,7 +377,7 @@ public:
   void setUpstreamToDownstream(UpstreamToDownstream& upstream_to_downstream_interface) override {
     upstream_request_.upstream_interface_ = upstream_to_downstream_interface;
   }
-
+  bool isHalfCloseEnabled() override { return upstream_request_.enable_half_close_; }
   Http::RequestTrailerMapPtr trailers_;
   Http::ResponseHeaderMapPtr informational_headers_;
   Http::ResponseHeaderMapPtr response_headers_;

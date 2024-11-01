@@ -1,9 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -e
 
+CURRENT_SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
+
 # shellcheck source=ci/envoy_build_sha.sh
-. "$(dirname "$0")"/envoy_build_sha.sh
+. "${CURRENT_SCRIPT_DIR}"/envoy_build_sha.sh
 
 function is_windows() {
   [[ "$(uname -s)" == *NT* ]]
@@ -51,6 +53,7 @@ else
   BUILD_DIR_MOUNT_DEST=/build
   SOURCE_DIR="${PWD}"
   SOURCE_DIR_MOUNT_DEST=/source
+  ENVOY_DOCKER_SOURCE_DIR="${ENVOY_DOCKER_SOURCE_DIR:-${SOURCE_DIR_MOUNT_DEST}}"
   START_COMMAND=(
       "/bin/bash"
       "-lc"
@@ -59,7 +62,7 @@ else
           && usermod -a -G pcap envoybuild \
           && chown envoybuild:envoygroup /build \
           && chown envoybuild /proc/self/fd/2 \
-          && sudo -EHs -u envoybuild bash -c 'cd /source && $*'")
+          && sudo -EHs -u envoybuild bash -c 'cd ${ENVOY_DOCKER_SOURCE_DIR} && $*'")
 fi
 
 if [[ -n "$ENVOY_DOCKER_PLATFORM" ]]; then
@@ -120,6 +123,7 @@ fi
 docker run --rm \
        "${ENVOY_DOCKER_OPTIONS[@]}" \
        "${VOLUMES[@]}" \
+       -e BUILD_DIR \
        -e HTTP_PROXY \
        -e HTTPS_PROXY \
        -e NO_PROXY \
@@ -127,7 +131,6 @@ docker run --rm \
        -e BAZEL_STARTUP_OPTIONS \
        -e BAZEL_BUILD_EXTRA_OPTIONS \
        -e BAZEL_EXTRA_TEST_OPTIONS \
-       -e BAZEL_FAKE_SCM_REVISION \
        -e BAZEL_REMOTE_CACHE \
        -e BAZEL_STARTUP_EXTRA_OPTIONS \
        -e CI_BRANCH \
@@ -154,15 +157,15 @@ docker run --rm \
        -e ENVOY_PUBLISH_DRY_RUN \
        -e ENVOY_REPO \
        -e ENVOY_TARBALL_DIR \
-       -e SYSTEM_PULLREQUEST_PULLREQUESTNUMBER \
+       -e ENVOY_GEN_COMPDB_OPTIONS \
        -e GCS_ARTIFACT_BUCKET \
+       -e GCS_REDIRECT_PATH \
        -e GITHUB_REF_NAME \
        -e GITHUB_REF_TYPE \
        -e GITHUB_TOKEN \
        -e GITHUB_APP_ID \
        -e GITHUB_INSTALL_ID \
        -e MOBILE_DOCS_CHECKOUT_DIR \
-       -e BUILD_SOURCEBRANCHNAME \
        -e BAZELISK_BASE_URL \
        -e ENVOY_BUILD_ARCH \
        -e SYSTEM_STAGEDISPLAYNAME \

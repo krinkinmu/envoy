@@ -12,19 +12,8 @@ namespace Extensions {
 namespace LoadBalancingPolices {
 namespace Subset {
 
-class Factory : public Upstream::NonThreadAwareLoadBalancerFactory {
-public:
-  std::string name() const override { return "envoy.load_balancing_policies.subset"; }
-
-  Upstream::LoadBalancerPtr create(const Upstream::ClusterInfo& cluster_info,
-                                   const Upstream::PrioritySet& priority_set,
-                                   const Upstream::PrioritySet* local_priority_set,
-                                   Runtime::Loader& runtime, Random::RandomGenerator& random,
-                                   TimeSource& time_source) override;
-};
-
 class SubsetLbFactory
-    : public Upstream::TypedLoadBalancerFactoryBase<Upstream::SubsetLoadbalancingPolicyProto> {
+    : public Upstream::TypedLoadBalancerFactoryBase<Upstream::SubsetLbConfigProto> {
 public:
   SubsetLbFactory() : TypedLoadBalancerFactoryBase("envoy.load_balancing_policies.subset") {}
 
@@ -35,8 +24,9 @@ public:
                                               Random::RandomGenerator& random,
                                               TimeSource& time_source) override;
 
-  Upstream::LoadBalancerConfigPtr loadConfig(const Protobuf::Message& config,
-                                             ProtobufMessage::ValidationVisitor& visitor) override;
+  Upstream::LoadBalancerConfigPtr
+  loadConfig(Server::Configuration::ServerFactoryContext& factory_context,
+             const Protobuf::Message& config) override;
 };
 
 } // namespace Subset

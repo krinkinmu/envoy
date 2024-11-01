@@ -34,8 +34,16 @@ public:
 };
 
 #ifdef USE_CEL_PARSER
+TEST_F(CELFormatterTest, TestNodeId) {
+  auto cel_parser = std::make_unique<CELFormatterCommandParser>(context_.server_factory_context_);
+  absl::optional<size_t> max_length = absl::nullopt;
+  auto formatter = cel_parser->parse("CEL", "xds.node.id", max_length);
+  EXPECT_THAT(formatter->formatValueWithContext(formatter_context_, stream_info_),
+              ProtoEq(ValueUtil::stringValue("node_name")));
+}
+
 TEST_F(CELFormatterTest, TestFormatValue) {
-  auto cel_parser = std::make_unique<CELFormatterCommandParser>(context_);
+  auto cel_parser = std::make_unique<CELFormatterCommandParser>(context_.server_factory_context_);
   absl::optional<size_t> max_length = absl::nullopt;
   auto formatter = cel_parser->parse("CEL", "request.headers[':method']", max_length);
   EXPECT_THAT(formatter->formatValueWithContext(formatter_context_, stream_info_),
@@ -43,14 +51,14 @@ TEST_F(CELFormatterTest, TestFormatValue) {
 }
 
 TEST_F(CELFormatterTest, TestParseFail) {
-  auto cel_parser = std::make_unique<CELFormatterCommandParser>(context_);
+  auto cel_parser = std::make_unique<CELFormatterCommandParser>(context_.server_factory_context_);
   absl::optional<size_t> max_length = absl::nullopt;
   EXPECT_EQ(nullptr,
             cel_parser->parse("INVALID_CMD", "requests.headers['missing_headers']", max_length));
 }
 
 TEST_F(CELFormatterTest, TestNullFormatValue) {
-  auto cel_parser = std::make_unique<CELFormatterCommandParser>(context_);
+  auto cel_parser = std::make_unique<CELFormatterCommandParser>(context_.server_factory_context_);
   absl::optional<size_t> max_length = absl::nullopt;
   auto formatter = cel_parser->parse("CEL", "requests.headers['missing_headers']", max_length);
   EXPECT_THAT(formatter->formatValueWithContext(formatter_context_, stream_info_),
@@ -69,7 +77,7 @@ TEST_F(CELFormatterTest, TestRequestHeader) {
   TestUtility::loadFromYaml(yaml, config_);
 
   auto formatter =
-      Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
+      *Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
   EXPECT_EQ("GET", formatter->formatWithContext(formatter_context_, stream_info_));
 }
 
@@ -85,7 +93,7 @@ TEST_F(CELFormatterTest, TestMissingRequestHeader) {
   TestUtility::loadFromYaml(yaml, config_);
 
   auto formatter =
-      Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
+      *Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
   EXPECT_EQ("-", formatter->formatWithContext(formatter_context_, stream_info_));
 }
 
@@ -101,7 +109,7 @@ TEST_F(CELFormatterTest, TestWithoutMaxLength) {
   TestUtility::loadFromYaml(yaml, config_);
 
   auto formatter =
-      Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
+      *Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
   EXPECT_EQ("/original/path?secret=parameter",
             formatter->formatWithContext(formatter_context_, stream_info_));
 }
@@ -118,8 +126,40 @@ TEST_F(CELFormatterTest, TestMaxLength) {
   TestUtility::loadFromYaml(yaml, config_);
 
   auto formatter =
-      Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
+      *Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
   EXPECT_EQ("/original", formatter->formatWithContext(formatter_context_, stream_info_));
+}
+
+TEST_F(CELFormatterTest, TestContains) {
+  const std::string yaml = R"EOF(
+  text_format_source:
+    inline_string: "%CEL(request.url_path.contains('request'))%"
+  formatters:
+    - name: envoy.formatter.cel
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.formatter.cel.v3.Cel
+)EOF";
+  TestUtility::loadFromYaml(yaml, config_);
+
+  auto formatter =
+      *Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
+  EXPECT_EQ("true", formatter->formatWithContext(formatter_context_, stream_info_));
+}
+
+TEST_F(CELFormatterTest, TestComplexCelExpression) {
+  const std::string yaml = R"EOF(
+  text_format_source:
+    inline_string: "%CEL(request.url_path.contains('request'))% %CEL(request.headers['x-envoy-original-path']):9% %CEL(request.url_path.contains('%)'))%"
+  formatters:
+    - name: envoy.formatter.cel
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.formatter.cel.v3.Cel
+)EOF";
+  TestUtility::loadFromYaml(yaml, config_);
+
+  auto formatter =
+      *Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_);
+  EXPECT_EQ("true /original false", formatter->formatWithContext(formatter_context_, stream_info_));
 }
 
 TEST_F(CELFormatterTest, TestInvalidExpression) {
@@ -134,7 +174,7 @@ TEST_F(CELFormatterTest, TestInvalidExpression) {
   TestUtility::loadFromYaml(yaml, config_);
 
   EXPECT_THROW_WITH_REGEX(
-      Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_),
+      *Envoy::Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config_, context_),
       EnvoyException, "Not able to parse filter expression: .*");
 }
 #endif

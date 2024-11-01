@@ -18,7 +18,7 @@
 
 # Documentation
 
-* If you are modifying the data plane structually, please keep the [Life of a
+* If you are modifying the data plane structurally, please keep the [Life of a
   Request](https://www.envoyproxy.io/docs/envoy/latest/intro/life_of_a_request) documentation up-to-date.
 
 # Deviations from Google C++ style guidelines
@@ -233,8 +233,8 @@ environment. In general, there should be no non-local network access. In additio
 
 Tests should be deterministic. They should not rely on randomness or details
 such as the current time. Instead, mocks such as
-[`MockRandomGenerator`](test/mocks/runtime/mocks.h) and
-[`Mock*TimeSource`](test/mocks/common.h) should be used.
+[`MockRandomGenerator`](test/mocks/common.h) and
+[`SimulatedTimeSystem`](test/test_common/simulated_time_system.h) should be used.
 
 # Google style guides for other languages
 

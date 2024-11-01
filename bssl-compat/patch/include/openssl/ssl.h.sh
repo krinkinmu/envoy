@@ -5,7 +5,7 @@ set -euo pipefail
 uncomment.sh "$1" --comment -h \
   --uncomment-func-decl TLS_method \
   --uncomment-func-decl OPENSSL_init_ssl \
-	--uncomment-func-decl DTLS_method \
+  --uncomment-func-decl DTLS_method \
   --uncomment-func-decl SSL_write \
   --uncomment-func-decl SSL_version \
   --uncomment-func-decl SSL_shutdown \
@@ -21,7 +21,9 @@ uncomment.sh "$1" --comment -h \
   --uncomment-func-decl SSL_set_connect_state \
   --uncomment-func-decl SSL_set_cipher_list \
   --uncomment-func-decl SSL_set_cert_cb \
+  --uncomment-func-decl SSL_set_enforce_rsa_key_usage \
   --uncomment-func-decl SSL_get0_peer_verify_algorithms \
+  --uncomment-func-decl SSL_get0_peer_certificates \
   --uncomment-func-decl SSL_set_bio \
   --uncomment-macro SSL_set_app_data \
   --uncomment-func-decl SSL_set_alpn_protos \
@@ -55,6 +57,7 @@ uncomment.sh "$1" --comment -h \
   --uncomment-func-decl SSL_do_handshake \
   --uncomment-func-decl SSL_CTX_check_private_key \
   --uncomment-func-decl SSL_CTX_set_tmp_ecdh \
+  --uncomment-func-decl SSL_CTX_set_reverify_on_resume \
   --uncomment-func-decl SSL_get0_next_proto_negotiated \
   --uncomment-func-decl SSL_CTX_use_PrivateKey \
   --uncomment-func-decl SSL_CTX_use_PrivateKey_file \
@@ -78,7 +81,7 @@ uncomment.sh "$1" --comment -h \
   --uncomment-func-decl SSL_CTX_set_alpn_protos \
   --uncomment-func-decl SSL_CTX_sess_set_new_cb \
   --uncomment-func-decl SSL_CTX_new \
-	--uncomment-func-decl SSL_CTX_up_ref \
+  --uncomment-func-decl SSL_CTX_up_ref \
   --uncomment-func-decl SSL_CTX_get0_param \
   --uncomment-func-decl SSL_CTX_get_verify_mode \
   --uncomment-func-decl SSL_CTX_get_options \
@@ -123,6 +126,7 @@ uncomment.sh "$1" --comment -h \
   --uncomment-func-decl SSL_get_signature_algorithm_name \
   --uncomment-func-decl SSL_get0_ocsp_response \
   --uncomment-func-decl SSL_set_chain_and_key \
+  --uncomment-func-decl SSL_was_key_usage_invalid \
   --uncomment-func-decl SSL_SESSION_from_bytes \
   --uncomment-func-decl SSL_is_server \
   --uncomment-func-decl SSL_is_init_finished \
@@ -130,10 +134,10 @@ uncomment.sh "$1" --comment -h \
   --uncomment-func-decl SSL_get_rbio \
   --uncomment-func-decl SSL_connect \
   --uncomment-func-decl SSL_accept \
-	--uncomment-func-decl SSL_free \
-	--uncomment-macro-redef 'SSL_ERROR_[[:alnum:]_]*' \
-	--uncomment-macro-redef '\(DTLS1\|DTLS1_2\|SSL3\|TLS1\|TLS1_1\|TLS1_2\|TLS1_3\)_VERSION' \
-	--uncomment-macro-redef '\(DTLS1\|SSL3\)_VERSION_MAJOR' \
+  --uncomment-func-decl SSL_free \
+  --uncomment-macro 'SSL_ERROR_[a-zA-Z0-9_]*' \
+  --uncomment-macro-redef '\(DTLS1\|DTLS1_2\|SSL3\|TLS1\|TLS1_1\|TLS1_2\|TLS1_3\)_VERSION' \
+  --uncomment-macro-redef '\(DTLS1\|SSL3\)_VERSION_MAJOR' \
   --uncomment-func-decl SSL_CTX_get_min_proto_version \
   --uncomment-func-decl SSL_CTX_get_max_proto_version \
   --uncomment-macro-redef 'SSL_OP_[[:alnum:]_]*' \
@@ -196,6 +200,5 @@ uncomment.sh "$1" --comment -h \
   --uncomment-func-decl SSL_CTX_set_private_key_method \
   --uncomment-func-decl SSL_send_fatal_alert \
   --uncomment-func-decl SSL_alert_desc_string_long \
-  --uncomment-func-decl SSL_CTX_get_session_cache_mode \
-
+  --uncomment-func-decl SSL_CTX_get_session_cache_mode
 

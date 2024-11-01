@@ -23,8 +23,14 @@
 #define PROTOBUF_GET_WRAPPED_OR_DEFAULT(message, field_name, default_value)                        \
   ((message).has_##field_name() ? (message).field_name().value() : (default_value))
 
+// Obtain the value of a wrapped field (e.g. google.protobuf.UInt32Value) if set. Otherwise, return
+// absl::nullopt.
+#define PROTOBUF_GET_OPTIONAL_WRAPPED(message, field_name)                                         \
+  ((message).has_##field_name() ? absl::make_optional((message).field_name().value())              \
+                                : absl::nullopt)
+
 // Obtain the value of a wrapped field (e.g. google.protobuf.UInt32Value) if set. Otherwise, throw
-// a MissingFieldException.
+// a EnvoyException.
 
 #define PROTOBUF_GET_WRAPPED_REQUIRED(message, field_name)                                         \
   ([](const auto& msg) {                                                                           \
@@ -51,8 +57,8 @@
              DurationUtil::durationToMilliseconds((message).field_name()))                         \
        : absl::nullopt)
 
-// Obtain the milliseconds value of a google.protobuf.Duration field if set. Otherwise, throw a
-// MissingFieldException.
+// Obtain the milliseconds value of a google.protobuf.Duration field if set. Otherwise, throw an
+// EnvoyException.
 #define PROTOBUF_GET_MS_REQUIRED(message, field_name)                                              \
   ([](const auto& msg) {                                                                           \
     if (!msg.has_##field_name()) {                                                                 \
@@ -61,8 +67,14 @@
     return DurationUtil::durationToMilliseconds(msg.field_name());                                 \
   }((message)))
 
-// Obtain the seconds value of a google.protobuf.Duration field if set. Otherwise, throw a
-// MissingFieldException.
+// Obtain the seconds value of a google.protobuf.Duration field if set. Otherwise, return the
+// default value.
+#define PROTOBUF_GET_SECONDS_OR_DEFAULT(message, field_name, default_value)                        \
+  ((message).has_##field_name() ? DurationUtil::durationToSeconds((message).field_name())          \
+                                : (default_value))
+
+// Obtain the seconds value of a google.protobuf.Duration field if set. Otherwise, throw an
+// EnvoyException.
 #define PROTOBUF_GET_SECONDS_REQUIRED(message, field_name)                                         \
   ([](const auto& msg) {                                                                           \
     if (!msg.has_##field_name()) {                                                                 \
@@ -133,11 +145,6 @@ uint64_t fractionalPercentDenominatorToInt(
 
 namespace Envoy {
 
-class MissingFieldException : public EnvoyException {
-public:
-  MissingFieldException(const std::string& field_name, const Protobuf::Message& message);
-};
-
 class TypeUtil {
 public:
   static absl::string_view typeUrlToDescriptorFullName(absl::string_view type_url);
@@ -203,10 +210,7 @@ public:
   }
 };
 
-class ProtoValidationException : public EnvoyException {
-public:
-  ProtoValidationException(const std::string& validation_error, const Protobuf::Message& message);
-};
+using ProtoValidationException = EnvoyException;
 
 /**
  * utility functions to call when throwing exceptions in header files
@@ -226,7 +230,7 @@ public:
 
   // std::equals_to
   bool operator()(const Protobuf::Message& lhs, const Protobuf::Message& rhs) const {
-    return Protobuf::util::MessageDifferencer::Equivalent(lhs, rhs);
+    return Protobuf::util::MessageDifferencer::Equals(lhs, rhs);
   }
 
   class FileExtensionValues {
@@ -251,7 +255,7 @@ public:
   static std::size_t hash(const Protobuf::Message& message);
 
 #ifdef ENVOY_ENABLE_YAML
-  static void loadFromJson(const std::string& json, Protobuf::Message& message,
+  static void loadFromJson(absl::string_view json, Protobuf::Message& message,
                            ProtobufMessage::ValidationVisitor& validation_visitor);
   /**
    * Return ok only when strict conversion(don't ignore unknown field) succeeds.
@@ -260,26 +264,43 @@ public:
    * Return error status for relaxed conversion and set has_unknown_field to false if relaxed
    * conversion(ignore unknown field) fails.
    */
-  static absl::Status loadFromJsonNoThrow(const std::string& json, Protobuf::Message& message,
+  static absl::Status loadFromJsonNoThrow(absl::string_view json, Protobuf::Message& message,
                                           bool& has_unknown_fileld);
-  static void loadFromJson(const std::string& json, ProtobufWkt::Struct& message);
+  static void loadFromJson(absl::string_view json, ProtobufWkt::Struct& message);
   static void loadFromYaml(const std::string& yaml, Protobuf::Message& message,
                            ProtobufMessage::ValidationVisitor& validation_visitor);
+#endif
+
+  // This function attempts to load Envoy configuration from the specified file
+  // based on the file type.
+  // It handles .pb .pb_text .json .yaml and .yml files which are well
+  // structured based on the file type.
+  // It has somewhat inconsistent handling of invalid file contents,
+  // occasionally failing over to try another type of parsing, or silently
+  // failing instead of throwing an exception.
   static void loadFromFile(const std::string& path, Protobuf::Message& message,
                            ProtobufMessage::ValidationVisitor& validation_visitor, Api::Api& api);
-#endif
 
   /**
    * Checks for use of deprecated fields in message and all sub-messages.
    * @param message message to validate.
    * @param validation_visitor the validation visitor to use.
    * @param recurse_into_any whether to recurse into Any messages during unexpected checking.
-   * @throw ProtoValidationException if deprecated fields are used and listed
+   * @throw EnvoyException if deprecated fields are used and listed
    *    in disallowed_features in runtime_features.h
    */
   static void checkForUnexpectedFields(const Protobuf::Message& message,
                                        ProtobufMessage::ValidationVisitor& validation_visitor,
                                        bool recurse_into_any = false);
+
+  /**
+   * Validates that duration fields in the config are valid.
+   * @param message message to validate.
+   * @param recurse_into_any whether to recurse into Any messages during unexpected checking.
+   * @throw EnvoyException if a duration field is invalid.
+   */
+  static void validateDurationFields(const Protobuf::Message& message,
+                                     bool recurse_into_any = false);
 
   /**
    * Perform a PGV check on the entire message tree, recursing into Any messages as needed.
@@ -294,16 +315,24 @@ public:
    * @param message message to validate.
    * @param validation_visitor the validation visitor to use.
    * @param recurse_into_any whether to recurse into Any messages during unexpected checking.
-   * @throw ProtoValidationException if the message does not satisfy its type constraints.
+   * @throw EnvoyException if the message does not satisfy its type constraints.
    */
   template <class MessageType>
   static void validate(const MessageType& message,
                        ProtobufMessage::ValidationVisitor& validation_visitor,
                        bool recurse_into_any = false) {
+    // TODO(adisuissa): There are multiple recursive traversals done by the
+    // calls in this function. This can be refactored into a single recursive
+    // traversal that invokes the various validators.
+
     // Log warnings or throw errors if deprecated fields or unknown fields are in use.
     if (!validation_visitor.skipValidation()) {
       checkForUnexpectedFields(message, validation_visitor, recurse_into_any);
     }
+
+    // Throw an exception if the config has an invalid Duration field. This is needed
+    // because Envoy validates the duration in a strict way that is not supported by PGV.
+    validateDurationFields(message, recurse_into_any);
 
     // TODO(mattklein123): This will recurse the message twice, once above and once for PGV. When
     // we move to always recursing, satisfying the TODO below, we should merge into a single
@@ -338,7 +367,7 @@ public:
    * of caller.
    * @param message const Protobuf::Message& to downcast and validate.
    * @return const MessageType& the concrete message type downcasted to on success.
-   * @throw ProtoValidationException if the message does not satisfy its type constraints.
+   * @throw EnvoyException if the message does not satisfy its type constraints.
    */
   template <class MessageType>
   static const MessageType&
@@ -369,7 +398,7 @@ public:
    *
    * @throw EnvoyException if the message does not unpack.
    */
-  static void unpackTo(const ProtobufWkt::Any& any_message, Protobuf::Message& message);
+  static void unpackToOrThrow(const ProtobufWkt::Any& any_message, Protobuf::Message& message);
 
   /**
    * Convert from google.protobuf.Any to a typed message. This should be used
@@ -380,8 +409,7 @@ public:
    *
    * @return absl::Status
    */
-  static absl::Status unpackToNoThrow(const ProtobufWkt::Any& any_message,
-                                      Protobuf::Message& message);
+  static absl::Status unpackTo(const ProtobufWkt::Any& any_message, Protobuf::Message& message);
 
   /**
    * Convert from google.protobuf.Any to bytes as std::string
@@ -392,12 +420,12 @@ public:
   static std::string anyToBytes(const ProtobufWkt::Any& any) {
     if (any.Is<ProtobufWkt::StringValue>()) {
       ProtobufWkt::StringValue s;
-      MessageUtil::unpackTo(any, s);
+      MessageUtil::unpackToOrThrow(any, s);
       return s.value();
     }
     if (any.Is<ProtobufWkt::BytesValue>()) {
       Protobuf::BytesValue b;
-      MessageUtil::unpackTo(any, b);
+      MessageUtil::unpackToOrThrow(any, b);
       return b.value();
     }
     return any.value();
@@ -411,7 +439,7 @@ public:
    */
   template <class MessageType>
   static inline void anyConvert(const ProtobufWkt::Any& message, MessageType& typed_message) {
-    unpackTo(message, typed_message);
+    unpackToOrThrow(message, typed_message);
   };
 
   template <class MessageType>
@@ -426,7 +454,7 @@ public:
    * @param message source google.protobuf.Any message.
    *
    * @return MessageType the typed message inside the Any.
-   * @throw ProtoValidationException if the message does not satisfy its type constraints.
+   * @throw EnvoyException if the message does not satisfy its type constraints.
    */
   template <class MessageType>
   static inline void anyConvertAndValidate(const ProtobufWkt::Any& message,
@@ -521,6 +549,10 @@ public:
                                                      bool always_print_primitive_fields = false);
 #endif
 
+  static std::string convertToStringForLogs(const Protobuf::Message& message,
+                                            bool pretty_print = false,
+                                            bool always_print_primitive_fields = false);
+
   /**
    * Utility method to create a Struct containing the passed in key/value strings.
    *
@@ -580,6 +612,13 @@ public:
    * the input string is valid UTF-8, it will be returned unmodified.
    */
   static std::string sanitizeUtf8String(absl::string_view str);
+
+  /**
+   * Return text proto representation of the `message`.
+   * @param message proto to print.
+   * @return text representation of the proto `message`.
+   */
+  static std::string toTextProto(const Protobuf::Message& message);
 };
 
 class ValueUtil {
@@ -679,18 +718,13 @@ private:
 
 class DurationUtil {
 public:
-  class OutOfRangeException : public EnvoyException {
-  public:
-    OutOfRangeException(const std::string& error) : EnvoyException(error) {}
-  };
-
   /**
    * Same as DurationUtil::durationToMilliseconds but with extra validation logic.
    * Same as Protobuf::util::TimeUtil::DurationToSeconds but with extra validation logic.
    * Specifically, we ensure that the duration is positive.
    * @param duration protobuf.
    * @return duration in milliseconds.
-   * @throw OutOfRangeException when duration is out-of-range.
+   * @throw EnvoyException when duration is out-of-range.
    */
   static uint64_t durationToMilliseconds(const ProtobufWkt::Duration& duration);
 
@@ -707,7 +741,7 @@ public:
    * Specifically, we ensure that the duration is positive.
    * @param duration protobuf.
    * @return duration in seconds.
-   * @throw OutOfRangeException when duration is out-of-range.
+   * @throw EnvoyException when duration is out-of-range.
    */
   static uint64_t durationToSeconds(const ProtobufWkt::Duration& duration);
 };
@@ -744,10 +778,7 @@ public:
 
 } // namespace Envoy
 
-namespace std {
-// Inject an implementation of std::hash for Envoy::HashedValue into the std namespace.
-template <> struct hash<Envoy::HashedValue> {
+// Specialize std::hash on Envoy::HashedValue.
+template <> struct std::hash<Envoy::HashedValue> {
   std::size_t operator()(Envoy::HashedValue const& v) const { return v.hash(); }
 };
-
-} // namespace std

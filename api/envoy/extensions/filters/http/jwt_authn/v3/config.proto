@@ -5,6 +5,7 @@ package envoy.extensions.filters.http.jwt_authn.v3;
 import "envoy/config/core/v3/base.proto";
 import "envoy/config/core/v3/http_uri.proto";
 import "envoy/config/route/v3/route_components.proto";
+import "envoy/type/matcher/v3/string.proto";
 
 import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
@@ -53,10 +54,22 @@ option (udpa.annotations.file_status).package_version_status = ACTIVE;
 //       cache_duration:
 //         seconds: 300
 //
-// [#next-free-field: 17]
+// [#next-free-field: 22]
 message JwtProvider {
   option (udpa.annotations.versioning).previous_message_type =
       "envoy.config.filter.http.jwt_authn.v2alpha.JwtProvider";
+
+  // Alters the payload representation in the request dynamic metadata to facilitate its use in matching.
+  message NormalizePayload {
+    // Each claim in this list will be interpreted as a space-delimited string
+    // and converted to a list of strings based on the delimited values.
+    // Example: a token with a claim ``scope: "email profile"`` is translated
+    // to dynamic metadata  ``scope: ["email", "profile"]`` if this field is
+    // set value ``["scope"]``. This special handling of ``scope`` is
+    // recommended by `RFC8693
+    // <https://datatracker.ietf.org/doc/html/rfc8693#name-scope-scopes-claim>`_.
+    repeated string space_delimited_claims = 1;
+  }
 
   // Specify the `principal <https://tools.ietf.org/html/rfc7519#section-4.1.1>`_ that issued
   // the JWT, usually a URL or an email address.
@@ -91,6 +104,48 @@ message JwtProvider {
   //     - bookstore_web.apps.googleusercontent.com
   //
   repeated string audiences = 2;
+
+  // Restrict the `subjects <https://tools.ietf.org/html/rfc7519#section-4.1.2>`_
+  // that the JwtProvider can assert. For instance, this could implement JWT-SVID
+  // `subject restrictions <https://github.com/spiffe/spiffe/blob/main/standards/JWT-SVID.md#31-subject>`_.
+  // If not specified, will not check subjects in the token.
+  //
+  // Example:
+  //
+  // .. code-block:: yaml
+  //
+  //     subjects:
+  //       prefix: spiffe://spiffe.example.com/
+  //
+  type.matcher.v3.StringMatcher subjects = 19;
+
+  // Requires that the credential contains an `expiration <https://tools.ietf.org/html/rfc7519#section-4.1.4>`_.
+  // For instance, this could implement JWT-SVID
+  // `expiration restrictions <https://github.com/spiffe/spiffe/blob/main/standards/JWT-SVID.md#33-expiration-time>`_.
+  // Unlike ``max_lifetime``, this only requires that expiration is present, where ``max_lifetime`` also checks the value.
+  //
+  // Example:
+  //
+  // .. code-block:: yaml
+  //
+  //     require_expiration: true
+  //
+  bool require_expiration = 20;
+
+  // Restrict the maximum remaining lifetime of a credential from the JwtProvider. Credential lifetime
+  // is the difference between the current time and the expiration of the credential. For instance,
+  // the following example will reject credentials that have a lifetime longer than 24 hours. If not set,
+  // expiration checking still occurs, but there is no limit on credential lifetime. If set, takes precedence
+  // over ``require_expiration``.
+  //
+  // Example:
+  //
+  // .. code-block:: yaml
+  //
+  //     max_lifetime:
+  //       seconds: 86400
+  //
+  google.protobuf.Duration max_lifetime = 21;
 
   // `JSON Web Key Set (JWKS) <https://tools.ietf.org/html/rfc7517#appendix-A>`_ is needed to
   // validate signature of a JWT. This field specifies where to fetch JWKS.
@@ -136,7 +191,7 @@ message JwtProvider {
 
   // If false, the JWT is removed in the request after a success verification. If true, the JWT is
   // not removed in the request. Default value is false.
-  // caveat: only works for from_header & has no effect for JWTs extracted through from_params & from_cookies.
+  // caveat: only works for from_header/from_params & has no effect for JWTs extracted through from_cookies.
   bool forward = 5;
 
   // Two fields below define where to extract the JWT from an HTTP request.
@@ -230,6 +285,9 @@ message JwtProvider {
   //
   string payload_in_metadata = 9;
 
+  // Normalizes the payload representation in the request metadata.
+  NormalizePayload normalize_payload_in_metadata = 18;
+
   // If not empty, similar to :ref:`payload_in_metadata <envoy_v3_api_field_extensions.filters.http.jwt_authn.v3.JwtProvider.payload_in_metadata>`,
   // a successfully verified JWT header will be written to :ref:`Dynamic State <arch_overview_data_sharing_between_filters>`
   // as an entry (``protobuf::Struct``) in ``envoy.filters.http.jwt_authn`` ``namespace`` with the
@@ -296,14 +354,26 @@ message JwtProvider {
   // Add JWT claim to HTTP Header
   // Specify the claim name you want to copy in which HTTP header. For examples, following config:
   // The claim must be of type; string, int, double, bool. Array type claims are not supported
-  // .. code-block:: yaml
   //
-  //   claim_to_headers:
-  //     - name: x-jwt-claim-nested-claim
-  //       claim: claim.nested.key
+  // .. literalinclude:: /_configs/repo/jwt_authn.yaml
+  //    :language: yaml
+  //    :lines: 44-48
+  //    :linenos:
+  //    :lineno-start: 44
+  //    :caption: :download:`jwt_authn.yaml </_configs/repo/jwt_authn.yaml>`
   //
-  // This header is only reserved for jwt claim; any other value will be overwrite.
+  // This header is only reserved for jwt claim; any other value will be overwritten.
   repeated JwtClaimToHeader claim_to_headers = 15;
+
+  // Clears route cache in order to allow JWT token to correctly affect
+  // routing decisions. Filter clears all cached routes when:
+  //
+  // 1. The field is set to ``true``.
+  //
+  // 2. At least one ``claim_to_headers`` header is added to the request OR
+  //    if ``payload_in_metadata`` is set.
+  //
+  bool clear_route_cache = 17;
 }
 
 // This message specifies JWT Cache configuration.
@@ -326,7 +396,7 @@ message RemoteJwks {
   //      cluster: jwt.www.googleapis.com|443
   //      timeout: 1s
   //
-  config.core.v3.HttpUri http_uri = 1;
+  config.core.v3.HttpUri http_uri = 1 [(validate.rules).message = {required: true}];
 
   // Duration after which the cached JWKS should be expired. If not specified, default cache
   // duration is 10 minutes.
@@ -660,7 +730,7 @@ message FilterStateRule {
 //              - provider_name: provider1
 //              - provider_name: provider2
 //
-// [#next-free-field: 6]
+// [#next-free-field: 7]
 message JwtAuthentication {
   option (udpa.annotations.versioning).previous_message_type =
       "envoy.config.filter.http.jwt_authn.v2alpha.JwtAuthentication";
@@ -733,6 +803,11 @@ message JwtAuthentication {
   // :ref:`requirement_name <envoy_v3_api_field_extensions.filters.http.jwt_authn.v3.PerRouteConfig.requirement_name>`
   // in ``PerRouteConfig`` uses this map to specify a JwtRequirement.
   map<string, JwtRequirement> requirement_map = 5;
+
+  // A request failing the verification process will receive a 401 downstream with the failure response details
+  // in the body along with WWWAuthenticate header value set with "invalid token". If this value is set to true,
+  // the response details will be stripped and only a 401 response code will be returned. Default value is false
+  bool strip_failure_response = 6;
 }
 
 // Specify per-route config.

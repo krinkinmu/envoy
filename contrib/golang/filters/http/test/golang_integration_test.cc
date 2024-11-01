@@ -11,6 +11,8 @@
 
 namespace Envoy {
 
+using testing::HasSubstr;
+
 // helper function
 absl::string_view getHeader(const Http::HeaderMap& headers, absl::string_view key) {
   auto values = headers.get(Http::LowerCaseString(key));
@@ -65,8 +67,8 @@ public:
   RetrieveDynamicMetadataFilterConfig()
       : Extensions::HttpFilters::Common::EmptyHttpFilterConfig("validate-dynamic-metadata") {}
 
-  Http::FilterFactoryCb createFilter(const std::string&,
-                                     Server::Configuration::FactoryContext&) override {
+  absl::StatusOr<Http::FilterFactoryCb>
+  createFilter(const std::string&, Server::Configuration::FactoryContext&) override {
     return [](Http::FilterChainFactoryCallbacks& callbacks) -> void {
       callbacks.addStreamEncoderFilter(std::make_shared<::Envoy::RetrieveDynamicMetadataFilter>());
     };
@@ -186,7 +188,7 @@ typed_config:
           rt->mutable_route()->set_cluster("cluster_0");
 
           // virtualhost level per route config
-          const std::string key = "envoy.filters.http.golang";
+          const std::string key = "golang";
           const auto yaml_fmt =
               R"EOF(
               "@type": type.googleapis.com/envoy.extensions.filters.http.golang.v3alpha.ConfigsPerRoute
@@ -340,7 +342,9 @@ typed_config:
     entries = upstream_request_->trailers()->get(Http::LowerCaseString("existed-trailer"));
     EXPECT_EQ(2, entries.size());
     EXPECT_EQ("foo", entries[0]->value().getStringView());
-    EXPECT_EQ("bar", entries[1]->value().getStringView());
+    if (entries.size() == 2) {
+      EXPECT_EQ("bar", entries[1]->value().getStringView());
+    }
 
     // check trailer value which set in golang: x-test-trailer-0
     entries = upstream_request_->trailers()->get(Http::LowerCaseString("x-test-trailer-0"));
@@ -506,6 +510,35 @@ typed_config:
     cleanup();
   }
 
+  void testRouteCache(std::string path, bool clear) {
+    initializeBasicFilter(BASIC);
+
+    codec_client_ = makeHttpConnection(makeClientConnection(lookupPort("http")));
+    Http::TestRequestHeaderMapImpl request_headers{
+        {":method", "POST"}, {":path", path}, {":scheme", "http"}, {":authority", "test.com"}};
+
+    auto encoder_decoder = codec_client_->startRequest(request_headers, true);
+    auto response = std::move(encoder_decoder.second);
+
+    // no route found after clearing
+    if (!clear) {
+      waitForNextUpstreamRequest();
+      Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+      upstream_request_->encodeHeaders(response_headers, true);
+    }
+
+    ASSERT_TRUE(response->waitForEndStream());
+
+    // check resp status
+    if (clear) {
+      EXPECT_EQ("404", response->headers().getStatusValue());
+    } else {
+      EXPECT_EQ("200", response->headers().getStatusValue());
+    }
+
+    cleanup();
+  }
+
   void testSendLocalReply(std::string path, std::string phase) {
     initializeBasicFilter(BASIC);
 
@@ -550,6 +583,15 @@ typed_config:
 
     // verify content-type
     EXPECT_EQ("text/html", getHeader(response->headers(), "content-type"));
+
+    // verify two values
+    auto values = response->headers().get(Http::LowerCaseString("x-two-values"));
+    if (values.size() == 2) {
+      EXPECT_EQ("foo", values[0]->value().getStringView());
+      EXPECT_EQ("bar", values[1]->value().getStringView());
+    } else {
+      EXPECT_EQ(values.size(), 2);
+    }
 
     cleanup();
   }
@@ -625,14 +667,9 @@ typed_config:
   }
 
   void cleanup() {
-    codec_client_->close();
+    cleanupUpstreamAndDownstream();
 
-    if (fake_upstream_connection_ != nullptr) {
-      AssertionResult result = fake_upstream_connection_->close();
-      RELEASE_ASSERT(result, result.message());
-      result = fake_upstream_connection_->waitForDisconnect();
-      RELEASE_ASSERT(result, result.message());
-    }
+    Dso::DsoManager<Dso::HttpFilterDsoImpl>::cleanUpForTest();
   }
 
   void testDynamicMetadata(std::string path) {
@@ -659,6 +696,32 @@ typed_config:
 
     ASSERT_TRUE(response->waitForEndStream());
     EXPECT_THAT(response->headers(), Http::HttpStatusIs("200"));
+    cleanup();
+  }
+
+  void testActionWithoutData(std::string query) {
+    initializeBasicFilter(ACTION, "test.com");
+    codec_client_ = makeHttpConnection(makeClientConnection(lookupPort("http")));
+    Http::TestRequestHeaderMapImpl request_headers{{":method", "GET"},
+                                                   {":path", "/test?" + query},
+                                                   {":scheme", "http"},
+                                                   {":authority", "test.com"}};
+
+    auto encoder_decoder = codec_client_->startRequest(request_headers, true);
+    auto response = std::move(encoder_decoder.second);
+
+    if (query.find("encodeHeadersRet") != std::string::npos) {
+      waitForNextUpstreamRequest();
+
+      Http::TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+      upstream_request_->encodeHeaders(response_headers, true);
+    }
+
+    ASSERT_TRUE(response->waitForEndStream());
+    EXPECT_EQ("500", response->headers().getStatusValue());
+
+    EXPECT_EQ(1, test_server_->counter("http.config_test.golang.panic_error")->value());
+
     cleanup();
   }
 
@@ -703,6 +766,7 @@ typed_config:
   const std::string PROPERTY{"property"};
   const std::string ACCESSLOG{"access_log"};
   const std::string METRIC{"metric"};
+  const std::string ACTION{"action"};
 };
 
 INSTANTIATE_TEST_SUITE_P(IpVersions, GolangIntegrationTest,
@@ -826,21 +890,25 @@ TEST_P(GolangIntegrationTest, Property) {
 }
 
 TEST_P(GolangIntegrationTest, AccessLog) {
+  useAccessLog("%DYNAMIC_METADATA(golang:access_log_var)%");
   initializeBasicFilter(ACCESSLOG, "test.com");
 
   auto path = "/test";
   codec_client_ = makeHttpConnection(makeClientConnection(lookupPort("http")));
   Http::TestRequestHeaderMapImpl request_headers{
-      {":method", "POST"},
-      {":path", path},
-      {":scheme", "http"},
-      {":authority", "test.com"},
+      {":method", "POST"},        {":path", path},  {":scheme", "http"},
+      {":authority", "test.com"}, {"Referer", "r"},
   };
 
   auto encoder_decoder = codec_client_->startRequest(request_headers);
   Http::RequestEncoder& request_encoder = encoder_decoder.first;
   auto response = std::move(encoder_decoder.second);
-  codec_client_->sendData(request_encoder, "helloworld", true);
+  codec_client_->sendData(request_encoder, "helloworld", false);
+
+  Http::TestRequestTrailerMapImpl request_trailers{
+      {"x-trailer", "foo"},
+  };
+  codec_client_->sendTrailers(request_encoder, request_trailers);
 
   waitForNextUpstreamRequest();
 
@@ -851,10 +919,16 @@ TEST_P(GolangIntegrationTest, AccessLog) {
   Buffer::OwnedImpl response_data1("good");
   upstream_request_->encodeData(response_data1, false);
   Buffer::OwnedImpl response_data2("bye");
-  upstream_request_->encodeData(response_data2, true);
+  upstream_request_->encodeData(response_data2, false);
+
+  Http::TestResponseTrailerMapImpl response_trailers{{"x-trailer", "bar"}};
+  upstream_request_->encodeTrailers(response_trailers);
 
   ASSERT_TRUE(response->waitForEndStream());
   codec_client_->close();
+
+  std::string log = waitForAccessLog(access_log_name_);
+  EXPECT_THAT(log, HasSubstr("access_log_var written by Golang filter"));
 
   // use the second request to get the logged data
   codec_client_ = makeHttpConnection(makeClientConnection((lookupPort("http"))));
@@ -865,6 +939,8 @@ TEST_P(GolangIntegrationTest, AccessLog) {
   EXPECT_EQ("206", getHeader(upstream_request_->headers(), "respCode"));
   EXPECT_EQ("7", getHeader(upstream_request_->headers(), "respSize"));
   EXPECT_EQ("true", getHeader(upstream_request_->headers(), "canRunAsyncly"));
+  EXPECT_EQ("foo", getHeader(upstream_request_->headers(), "x-req-trailer"));
+  EXPECT_EQ("bar", getHeader(upstream_request_->headers(), "x-resp-trailer"));
 
   cleanup();
 }
@@ -1071,6 +1147,16 @@ TEST_P(GolangIntegrationTest, RouteConfig_Route) {
   testRouteConfig("test.com", "/route-config-test", false, "baz");
 }
 
+// Set new path without clear route cache, will get 200 response status
+TEST_P(GolangIntegrationTest, RouteCache_noClear) {
+  testRouteCache("/test?newPath=/not-found-path", false);
+}
+
+// Set new path with clear route cache, will get 404 response status
+TEST_P(GolangIntegrationTest, RouteCache_Clear) {
+  testRouteCache("/test?newPath=/not-found-path&clearRoute=1", true);
+}
+
 // Out of range in decode header phase
 TEST_P(GolangIntegrationTest, PanicRecover_DecodeHeader) {
   testPanicRecover("/test?panic=decode-header", "decode-header");
@@ -1109,6 +1195,38 @@ TEST_P(GolangIntegrationTest, DynamicMetadata_Async) {
 
 TEST_P(GolangIntegrationTest, DynamicMetadata_Async_Sleep) {
   testDynamicMetadata("/test?dymeta=1&async=1&sleep=1");
+}
+
+TEST_P(GolangIntegrationTest, DecodeHeadersWithoutData_StopAndBuffer) {
+  testActionWithoutData("decodeHeadersRet=StopAndBuffer");
+}
+
+TEST_P(GolangIntegrationTest, DecodeHeadersWithoutData_StopAndBufferWatermark) {
+  testActionWithoutData("decodeHeadersRet=StopAndBufferWatermark");
+}
+
+TEST_P(GolangIntegrationTest, DecodeHeadersWithoutData_StopAndBuffer_Async) {
+  testActionWithoutData("decodeHeadersRet=StopAndBuffer&aysnc=1");
+}
+
+TEST_P(GolangIntegrationTest, DecodeHeadersWithoutData_StopAndBufferWatermark_Async) {
+  testActionWithoutData("decodeHeadersRet=StopAndBufferWatermark&aysnc=1");
+}
+
+TEST_P(GolangIntegrationTest, EncodeHeadersWithoutData_StopAndBuffer) {
+  testActionWithoutData("encodeHeadersRet=StopAndBuffer");
+}
+
+TEST_P(GolangIntegrationTest, EncodeHeadersWithoutData_StopAndBufferWatermark) {
+  testActionWithoutData("encodeHeadersRet=StopAndBufferWatermark");
+}
+
+TEST_P(GolangIntegrationTest, EncodeHeadersWithoutData_StopAndBuffer_Async) {
+  testActionWithoutData("encodeHeadersRet=StopAndBuffer&aysnc=1");
+}
+
+TEST_P(GolangIntegrationTest, EncodeHeadersWithoutData_StopAndBufferWatermark_Async) {
+  testActionWithoutData("encodeHeadersRet=StopAndBufferWatermark&aysnc=1");
 }
 
 } // namespace Envoy

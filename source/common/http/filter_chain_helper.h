@@ -6,24 +6,43 @@
 #include "envoy/filter/config_provider_manager.h"
 #include "envoy/http/filter.h"
 
+#include "source/common/common/empty_string.h"
 #include "source/common/common/logger.h"
 #include "source/common/filter/config_discovery_impl.h"
 #include "source/common/http/dependency_manager.h"
+#include "source/extensions/filters/http/common/pass_through_filter.h"
 
 namespace Envoy {
 namespace Http {
 
 using DownstreamFilterConfigProviderManager =
-    Filter::FilterConfigProviderManager<Filter::NamedHttpFilterFactoryCb,
+    Filter::FilterConfigProviderManager<Filter::HttpFilterFactoryCb,
                                         Server::Configuration::FactoryContext>;
 using UpstreamFilterConfigProviderManager =
-    Filter::FilterConfigProviderManager<Filter::NamedHttpFilterFactoryCb,
+    Filter::FilterConfigProviderManager<Filter::HttpFilterFactoryCb,
                                         Server::Configuration::UpstreamFactoryContext>;
+
+// Allows graceful handling of missing configuration for ECDS.
+class MissingConfigFilter : public Http::PassThroughDecoderFilter {
+public:
+  Http::FilterHeadersStatus decodeHeaders(Http::RequestHeaderMap&, bool) override {
+    decoder_callbacks_->streamInfo().setResponseFlag(
+        StreamInfo::CoreResponseFlag::NoFilterConfigFound);
+    decoder_callbacks_->sendLocalReply(Http::Code::InternalServerError, EMPTY_STRING, nullptr,
+                                       absl::nullopt, EMPTY_STRING);
+    return Http::FilterHeadersStatus::StopIteration;
+  }
+};
+
+static Http::FilterFactoryCb MissingConfigFilterFactory =
+    [](Http::FilterChainFactoryCallbacks& cb) {
+      cb.addStreamDecoderFilter(std::make_shared<MissingConfigFilter>());
+    };
 
 class FilterChainUtility : Logger::Loggable<Logger::Id::config> {
 public:
   struct FilterFactoryProvider {
-    Filter::FilterConfigProviderPtr<Filter::NamedHttpFilterFactoryCb> provider;
+    Filter::FilterConfigProviderPtr<Filter::HttpFilterFactoryCb> provider;
     // If true, this filter is disabled by default and must be explicitly enabled by
     // route configuration.
     bool disabled{};
@@ -51,7 +70,7 @@ class FilterChainHelper : Logger::Loggable<Logger::Id::config> {
 public:
   using FilterFactoriesList = FilterChainUtility::FilterFactoriesList;
   using FilterConfigProviderManager =
-      Filter::FilterConfigProviderManager<Filter::NamedHttpFilterFactoryCb, FilterCtx>;
+      Filter::FilterConfigProviderManager<Filter::HttpFilterFactoryCb, FilterCtx>;
 
   FilterChainHelper(FilterConfigProviderManager& filter_config_provider_manager,
                     Server::Configuration::ServerFactoryContext& server_context,
@@ -122,15 +141,18 @@ private:
     }
     ProtobufTypes::MessagePtr message = Config::Utility::translateToFactoryConfig(
         proto_config, server_context_.messageValidationVisitor(), *factory);
-    Http::FilterFactoryCb callback =
+    absl::StatusOr<Http::FilterFactoryCb> callback_or_error =
         factory->createFilterFactoryFromProto(*message, stats_prefix_, factory_context_);
+    if (!callback_or_error.status().ok()) {
+      return callback_or_error.status();
+    }
     dependency_manager.registerFilter(factory->name(), *factory->dependencies());
     const bool is_terminal = factory->isTerminalFilterByProto(*message, server_context_);
-    Config::Utility::validateTerminalFilters(proto_config.name(), factory->name(),
-                                             filter_chain_type, is_terminal,
-                                             last_filter_in_current_config);
+    RETURN_IF_NOT_OK(Config::Utility::validateTerminalFilters(proto_config.name(), factory->name(),
+                                                              filter_chain_type, is_terminal,
+                                                              last_filter_in_current_config));
     auto filter_config_provider = filter_config_provider_manager_.createStaticFilterConfigProvider(
-        {factory->name(), callback}, proto_config.name());
+        callback_or_error.value(), proto_config.name());
 #ifdef ENVOY_ENABLE_YAML
     ENVOY_LOG(debug, "      name: {}", filter_config_provider->name());
     ENVOY_LOG(debug, "    config: {}",

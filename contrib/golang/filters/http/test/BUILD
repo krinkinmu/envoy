@@ -16,6 +16,7 @@ envoy_cc_test(
     data = [
         "//contrib/golang/filters/http/test/test_data/passthrough:filter.so",
     ],
+    rbe_pool = "6gig",
     deps = [
         "//contrib/golang/filters/http/source:config",
         "//test/mocks/server:factory_context_mocks",
@@ -30,6 +31,7 @@ envoy_cc_test(
         "//contrib/golang/filters/http/test/test_data/passthrough:filter.so",
         "//contrib/golang/filters/http/test/test_data/routeconfig:filter.so",
     ],
+    rbe_pool = "6gig",
     deps = [
         "//contrib/golang/filters/http/source:golang_filter_lib",
         "//source/common/stream_info:stream_info_lib",
@@ -51,6 +53,7 @@ envoy_cc_test(
     srcs = ["golang_integration_test.cc"],
     data = [
         "//contrib/golang/filters/http/test/test_data/access_log:filter.so",
+        "//contrib/golang/filters/http/test/test_data/action:filter.so",
         "//contrib/golang/filters/http/test/test_data/basic:filter.so",
         "//contrib/golang/filters/http/test/test_data/buffer:filter.so",
         "//contrib/golang/filters/http/test/test_data/echo:filter.so",
@@ -59,9 +62,11 @@ envoy_cc_test(
         "//contrib/golang/filters/http/test/test_data/property:filter.so",
         "//contrib/golang/filters/http/test/test_data/routeconfig:filter.so",
     ],
+    rbe_pool = "6gig",
     deps = [
         "//contrib/golang/filters/http/source:config",
         "//source/exe:main_common_lib",
+        "//source/extensions/filters/http/lua:config",
         "//test/config:v2_link_hacks",
         "//test/integration:http_integration_lib",
         "//test/test_common:utility_lib",
@@ -83,6 +88,7 @@ envoy_cc_fuzz_test(
     name = "golang_filter_fuzz_test",
     srcs = ["golang_filter_fuzz_test.cc"],
     corpus = "golang_filter_corpus",
+    rbe_pool = "6gig",
     deps = [
         ":golang_filter_fuzz_proto_cc_proto",
         "//contrib/golang/common/dso/test:dso_mocks",
@@ -94,5 +100,29 @@ envoy_cc_fuzz_test(
         "//test/mocks/runtime:runtime_mocks",
         "//test/mocks/server:factory_context_mocks",
         "@envoy_api//contrib/envoy/extensions/filters/http/golang/v3alpha:pkg_cc_proto",
+    ],
+)
+
+envoy_cc_test(
+    name = "websocket_integration_test",
+    size = "large",
+    srcs = ["websocket_integration_test.cc"],
+    data = [
+        "//contrib/golang/filters/http/test/test_data/websocket:filter.so",
+    ],
+    rbe_pool = "6gig",
+    tags = [
+        "cpu:3",
+    ],
+    deps = [
+        "//contrib/golang/filters/http/source:config",
+        "//source/common/http:header_map_lib",
+        "//source/extensions/access_loggers/file:config",
+        "//source/extensions/filters/http/buffer:config",
+        "//test/integration:http_protocol_integration_lib",
+        "//test/integration:websocket_integration_test_lib",
+        "//test/test_common:utility_lib",
+        "@envoy_api//envoy/config/bootstrap/v3:pkg_cc_proto",
+        "@envoy_api//envoy/extensions/filters/network/http_connection_manager/v3:pkg_cc_proto",
     ],
 )

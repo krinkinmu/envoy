@@ -265,6 +265,18 @@ additional addresses from XFF:
   the XFF contains fewer than N addresses, Envoy falls back to using the immediate downstream
   connection's source address as trusted client address.)
 
+.. note::
+
+ If the trusted client address should be determined from a list of known CIDRs, use the
+ :ref:`xff <envoy_v3_api_msg_extensions.http.original_ip_detection.xff.v3.XffConfig>` original IP
+ detection option instead.
+
+ * If the remote address is contained by an entry in ``xff_trusted_cidrs``, and the *last*
+   (rightmost) entry is also contained by an entry in ``xff_trusted_cidrs``, the trusted client
+   address is *second-last* IP address in XFF.
+ * If all entries in XFF are contained by an entry in ``xff_trusted_cidrs``, the trusted client
+   address is the *first* (leftmost) IP address in XFF.
+
 Envoy uses the trusted client address contents to determine whether a request originated
 externally or internally. This influences whether the
 :ref:`config_http_conn_man_headers_x-envoy-internal` header is set.
@@ -355,6 +367,36 @@ Example 6: The internal Envoy from Example 5, receiving a request proxied by ano
       | X-Envoy-External-Address remains unset
       | X-Envoy-Internal is set to "true"
 
+Example 7: Envoy as edge proxy, with one trusted CIDR
+    Settings:
+      | use_remote_address = false
+      | xff_trusted_cidrs = 192.0.2.0/24
+
+    Request details:
+      | Downstream IP address = 192.0.2.5
+      | XFF = "203.0.113.128, 203.0.113.10, 192.0.2.1"
+
+    Result:
+      | Trusted client address = 192.0.2.1
+      | X-Envoy-External-Address is set to 192.0.2.1
+      | XFF is changed to "203.0.113.128, 203.0.113.10, 192.0.2.1, 192.0.2.5"
+      | X-Envoy-Internal is removed (if it was present in the incoming request)
+
+Example 8: Envoy as edge proxy, with two trusted CIDRs
+    Settings:
+      | use_remote_address = false
+      | xff_trusted_cidrs = 192.0.2.0/24, 198.51.100.0/24
+
+    Request details:
+      | Downstream IP address = 192.0.2.5
+      | XFF = "203.0.113.128, 203.0.113.10, 198.51.100.1"
+
+    Result:
+      | Trusted client address = 203.0.113.10
+      | X-Envoy-External-Address is set to 203.0.113.10
+      | XFF is changed to "203.0.113.128, 203.0.113.10, 198.51.100.1, 192.0.2.5"
+      | X-Envoy-Internal is removed (if it was present in the incoming request)
+
 A few very important notes about XFF:
 
 1. If ``use_remote_address`` is set to true, Envoy sets the
@@ -434,6 +476,16 @@ configuration option, ``x-forwarded-proto`` will be updated as well.
 The ``x-forwarded-proto`` header will be used by Envoy over ``:scheme`` where the underlying
 encryption is wanted, for example clearing default ports based on ``x-forwarded-proto``. See
 :ref:`why_is_envoy_using_xfp_or_scheme` for more details.
+
+.. _config_http_conn_man_headers_x-envoy-local-overloaded:
+
+x-envoy-local-overloaded
+------------------------
+
+Envoy will set this header on the downstream response
+if a request was dropped due to :ref:`overload manager<arch_overview_overload_manager>` and
+:ref:`configuration option <envoy_v3_api_field_extensions.filters.network.http_connection_manager.v3.HttpConnectionManager.append_local_overload>`
+is set to true.
 
 .. _config_http_conn_man_headers_x-request-id:
 

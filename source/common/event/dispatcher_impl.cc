@@ -26,7 +26,6 @@
 #include "source/common/filesystem/watcher_impl.h"
 #include "source/common/network/address_impl.h"
 #include "source/common/network/connection_impl.h"
-#include "source/common/network/tcp_listener_impl.h"
 #include "source/common/runtime/runtime_features.h"
 
 #include "event2/event.h"
@@ -56,21 +55,20 @@ DispatcherImpl::DispatcherImpl(const std::string& name, Api::Api& api,
                                Event::TimeSystem& time_system,
                                const ScaledRangeTimerManagerFactory& scaled_timer_factory,
                                const Buffer::WatermarkFactorySharedPtr& watermark_factory)
-    : DispatcherImpl(name, api.threadFactory(), api.timeSource(), api.randomGenerator(),
-                     api.fileSystem(), time_system, scaled_timer_factory,
+    : DispatcherImpl(name, api.threadFactory(), api.timeSource(), api.fileSystem(), time_system,
+                     scaled_timer_factory,
                      watermark_factory != nullptr
                          ? watermark_factory
                          : std::make_shared<Buffer::WatermarkBufferFactory>(
                                api.bootstrap().overload_manager().buffer_factory_config())) {}
 
 DispatcherImpl::DispatcherImpl(const std::string& name, Thread::ThreadFactory& thread_factory,
-                               TimeSource& time_source, Random::RandomGenerator& random_generator,
-                               Filesystem::Instance& file_system, Event::TimeSystem& time_system,
+                               TimeSource& time_source, Filesystem::Instance& file_system,
+                               Event::TimeSystem& time_system,
                                const ScaledRangeTimerManagerFactory& scaled_timer_factory,
                                const Buffer::WatermarkFactorySharedPtr& watermark_factory)
     : name_(name), thread_factory_(thread_factory), time_source_(time_source),
-      random_generator_(random_generator), file_system_(file_system),
-      buffer_factory_(watermark_factory),
+      file_system_(file_system), buffer_factory_(watermark_factory),
       scheduler_(time_system.createScheduler(base_scheduler_, base_scheduler_)),
       thread_local_delete_cb_(
           base_scheduler_.createSchedulableCallback([this]() -> void { runThreadLocalDelete(); })),
@@ -81,8 +79,13 @@ DispatcherImpl::DispatcherImpl(const std::string& name, Thread::ThreadFactory& t
   ASSERT(!name_.empty());
   FatalErrorHandler::registerFatalErrorHandler(*this);
   updateApproximateMonotonicTimeInternal();
-  base_scheduler_.registerOnPrepareCallback(
-      std::bind(&DispatcherImpl::updateApproximateMonotonicTime, this));
+  if (Runtime::runtimeFeatureEnabled("envoy.restart_features.fix_dispatcher_approximate_now")) {
+    base_scheduler_.registerOnCheckCallback(
+        std::bind(&DispatcherImpl::updateApproximateMonotonicTime, this));
+  } else {
+    base_scheduler_.registerOnPrepareCallback(
+        std::bind(&DispatcherImpl::updateApproximateMonotonicTime, this));
+  }
 }
 
 DispatcherImpl::~DispatcherImpl() {
@@ -180,7 +183,7 @@ FileEventPtr DispatcherImpl::createFileEvent(os_fd_t fd, FileReadyCb cb, FileTri
       *this, fd,
       [this, cb](uint32_t events) {
         touchWatchdog();
-        cb(events);
+        return cb(events);
       },
       trigger, events)};
 }
@@ -188,18 +191,6 @@ FileEventPtr DispatcherImpl::createFileEvent(os_fd_t fd, FileReadyCb cb, FileTri
 Filesystem::WatcherPtr DispatcherImpl::createFilesystemWatcher() {
   ASSERT(isThreadSafe());
   return Filesystem::WatcherPtr{new Filesystem::WatcherImpl(*this, file_system_)};
-}
-
-Network::ListenerPtr
-DispatcherImpl::createListener(Network::SocketSharedPtr&& socket, Network::TcpListenerCallbacks& cb,
-                               Runtime::Loader& runtime,
-                               const Network::ListenerConfig& listener_config,
-                               Server::ThreadLocalOverloadStateOptRef overload_state) {
-  ASSERT(isThreadSafe());
-  return std::make_unique<Network::TcpListenerImpl>(
-      *this, random_generator_, runtime, std::move(socket), cb, listener_config.bindToPort(),
-      listener_config.ignoreGlobalConnLimit(),
-      listener_config.maxConnectionsToAcceptPerSocketEvent(), overload_state);
 }
 
 TimerPtr DispatcherImpl::createTimer(TimerCb cb) {

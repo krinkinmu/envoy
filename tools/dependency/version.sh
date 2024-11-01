@@ -1,5 +1,6 @@
-#!/bin/bash -e
+#!/usr/bin/env bash
 
+set -e
 set -o pipefail
 
 JQ="$1"
@@ -11,4 +12,4 @@ if [[ -z "$DEP" ]]; then
     exit 1
 fi
 
-$JQ -r ".${DEP}" "$VERSIONS"
+$JQ -r ".[\"${DEP}\"]" "$VERSIONS"

@@ -1,4 +1,4 @@
-#include "null_route_impl.h"
+#include "source/common/http/null_route_impl.h"
 
 #include <vector>
 
@@ -12,7 +12,7 @@ const Router::InternalRedirectPolicyImpl RouteEntryImpl::internal_redirect_polic
 const Router::PathMatcherSharedPtr RouteEntryImpl::path_matcher_;
 const Router::PathRewriterSharedPtr RouteEntryImpl::path_rewriter_;
 const std::vector<Router::ShadowPolicyPtr> RouteEntryImpl::shadow_policies_;
-const NullVirtualHost RouteEntryImpl::virtual_host_;
+const NullVirtualHost NullRouteImpl::virtual_host_;
 const NullRateLimitPolicy NullVirtualHost::rate_limit_policy_;
 const NullCommonConfig NullVirtualHost::route_configuration_;
 const std::multimap<std::string, std::string> RouteEntryImpl::opaque_config_;

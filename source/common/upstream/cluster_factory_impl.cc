@@ -65,7 +65,7 @@ ClusterFactoryImplBase::create(const envoy::config::cluster::v3::Cluster& cluste
   return factory->create(cluster, context);
 }
 
-Network::DnsResolverSharedPtr
+absl::StatusOr<Network::DnsResolverSharedPtr>
 ClusterFactoryImplBase::selectDnsResolver(const envoy::config::cluster::v3::Cluster& cluster,
                                           ClusterFactoryContext& context) {
   // We make this a shared pointer to deal with the distinct ownership
@@ -97,7 +97,7 @@ ClusterFactoryImplBase::create(const envoy::config::cluster::v3::Cluster& cluste
 
   absl::StatusOr<std::pair<ClusterImplBaseSharedPtr, ThreadAwareLoadBalancerPtr>>
       status_or_cluster = createClusterImpl(cluster, context);
-  RETURN_IF_STATUS_NOT_OK(status_or_cluster);
+  RETURN_IF_NOT_OK_REF(status_or_cluster.status());
   std::pair<ClusterImplBaseSharedPtr, ThreadAwareLoadBalancerPtr>& new_cluster_pair =
       status_or_cluster.value();
 
@@ -110,15 +110,17 @@ ClusterFactoryImplBase::create(const envoy::config::cluster::v3::Cluster& cluste
     } else {
       auto checker_or_error = HealthCheckerFactory::create(cluster.health_checks()[0],
                                                            *new_cluster_pair.first, server_context);
-      RETURN_IF_STATUS_NOT_OK(checker_or_error);
+      RETURN_IF_NOT_OK_REF(checker_or_error.status());
       new_cluster_pair.first->setHealthChecker(checker_or_error.value());
     }
   }
 
-  new_cluster_pair.first->setOutlierDetector(Outlier::DetectorImplFactory::createForCluster(
+  auto detector_or_error = Outlier::DetectorImplFactory::createForCluster(
       *new_cluster_pair.first, cluster, server_context.mainThreadDispatcher(),
       server_context.runtime(), context.outlierEventLogger(),
-      server_context.api().randomGenerator()));
+      server_context.api().randomGenerator());
+  RETURN_IF_NOT_OK_REF(detector_or_error.status());
+  new_cluster_pair.first->setOutlierDetector(detector_or_error.value());
 
   return status_or_cluster;
 }

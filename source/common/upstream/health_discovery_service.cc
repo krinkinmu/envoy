@@ -371,10 +371,13 @@ HdsCluster::HdsCluster(Server::Configuration::ServerFactoryContext& server_conte
     for (const auto& host : locality_endpoints.lb_endpoints()) {
       const LocalityEndpointTuple endpoint_key = {locality_endpoints.locality(), host};
       // Initialize an endpoint host object.
-      HostSharedPtr endpoint = std::make_shared<HostImpl>(
-          info_, "", Network::Address::resolveProtoAddress(host.endpoint().address()), nullptr, 1,
-          locality_endpoints.locality(), host.endpoint().health_check_config(), 0,
-          envoy::config::core::v3::UNKNOWN, time_source_);
+      auto address_or_error = Network::Address::resolveProtoAddress(host.endpoint().address());
+      THROW_IF_NOT_OK_REF(address_or_error.status());
+      HostSharedPtr endpoint = std::shared_ptr<HostImpl>(THROW_OR_RETURN_VALUE(
+          HostImpl::create(info_, "", std::move(address_or_error.value()), nullptr, nullptr, 1,
+                           locality_endpoints.locality(), host.endpoint().health_check_config(), 0,
+                           envoy::config::core::v3::UNKNOWN, time_source_),
+          std::unique_ptr<HostImpl>));
       // Add this host/endpoint pointer to our flat list of endpoints for health checking.
       hosts_->push_back(endpoint);
       // Add this host/endpoint pointer to our structured list by locality so results can be
@@ -438,7 +441,7 @@ absl::Status HdsCluster::updateHealthchecks(
       // If it does not, create a new one.
       auto checker_or_error =
           Upstream::HealthCheckerFactory::create(health_check, *this, server_context_);
-      RETURN_IF_STATUS_NOT_OK(checker_or_error);
+      RETURN_IF_NOT_OK_REF(checker_or_error.status());
       auto new_health_checker = checker_or_error.value();
       health_checkers_map.insert({health_check, new_health_checker});
       health_checkers.push_back(new_health_checker);
@@ -483,10 +486,14 @@ void HdsCluster::updateHosts(
         host = host_pair->second;
       } else {
         // We do not have this endpoint saved, so create a new one.
-        host = std::make_shared<HostImpl>(
-            info_, "", Network::Address::resolveProtoAddress(endpoint.endpoint().address()),
-            nullptr, 1, endpoints.locality(), endpoint.endpoint().health_check_config(), 0,
-            envoy::config::core::v3::UNKNOWN, time_source_);
+        auto address_or_error =
+            Network::Address::resolveProtoAddress(endpoint.endpoint().address());
+        THROW_IF_NOT_OK_REF(address_or_error.status());
+        host = std::shared_ptr<HostImpl>(THROW_OR_RETURN_VALUE(
+            HostImpl::create(info_, "", std::move(address_or_error.value()), nullptr, nullptr, 1,
+                             endpoints.locality(), endpoint.endpoint().health_check_config(), 0,
+                             envoy::config::core::v3::UNKNOWN, time_source_),
+            std::unique_ptr<HostImpl>));
 
         // Set the initial health status as in HdsCluster::initialize.
         host->healthFlagSet(Host::HealthFlag::FAILED_ACTIVE_HC);
@@ -520,8 +527,9 @@ void HdsCluster::updateHosts(
   // Update the priority set.
   hosts_per_locality_ =
       std::make_shared<Envoy::Upstream::HostsPerLocalityImpl>(std::move(hosts_by_locality), false);
-  priority_set_.updateHosts(0, HostSetImpl::partitionHosts(hosts_, hosts_per_locality_), {},
-                            hosts_added, hosts_removed, absl::nullopt, absl::nullopt);
+  priority_set_.updateHosts(
+      0, HostSetImpl::partitionHosts(hosts_, hosts_per_locality_), {}, hosts_added, hosts_removed,
+      server_context_.api().randomGenerator().random(), absl::nullopt, absl::nullopt);
 }
 
 ClusterSharedPtr HdsCluster::create() { return nullptr; }
@@ -536,22 +544,27 @@ ProdClusterInfoFactory::createClusterInfo(const CreateClusterInfoParams& params)
       params.server_context_.clusterManager(), params.server_context_.messageValidationVisitor());
 
   // TODO(JimmyCYJ): Support SDS for HDS cluster.
-  Network::UpstreamTransportSocketFactoryPtr socket_factory =
-      Upstream::createTransportSocketFactory(params.cluster_, factory_context);
-  auto socket_matcher = std::make_unique<TransportSocketMatcherImpl>(
-      params.cluster_.transport_socket_matches(), factory_context, socket_factory, *scope);
+  Network::UpstreamTransportSocketFactoryPtr socket_factory = THROW_OR_RETURN_VALUE(
+      Upstream::createTransportSocketFactory(params.cluster_, factory_context),
+      Network::UpstreamTransportSocketFactoryPtr);
+  auto socket_matcher = THROW_OR_RETURN_VALUE(
+      TransportSocketMatcherImpl::create(params.cluster_.transport_socket_matches(),
+                                         factory_context, socket_factory, *scope),
+      std::unique_ptr<TransportSocketMatcherImpl>);
 
-  return std::make_unique<ClusterInfoImpl>(
-      params.server_context_.initManager(), params.server_context_, params.cluster_,
-      params.bind_config_, params.server_context_.runtime(), std::move(socket_matcher),
-      std::move(scope), params.added_via_api_, factory_context);
+  return THROW_OR_RETURN_VALUE(
+      ClusterInfoImpl::create(params.server_context_.initManager(), params.server_context_,
+                              params.cluster_, params.bind_config_,
+                              params.server_context_.runtime(), std::move(socket_matcher),
+                              std::move(scope), params.added_via_api_, factory_context),
+      std::unique_ptr<ClusterInfoImpl>);
 }
 
 void HdsCluster::initHealthchecks() {
   for (auto& health_check : cluster_.health_checks()) {
     auto health_checker_or_error =
         Upstream::HealthCheckerFactory::create(health_check, *this, server_context_);
-    THROW_IF_STATUS_NOT_OK(health_checker_or_error, throw);
+    THROW_IF_NOT_OK_REF(health_checker_or_error.status());
 
     auto health_checker = health_checker_or_error.value();
     health_checkers_.push_back(health_checker);
@@ -571,7 +584,8 @@ void HdsCluster::initialize(std::function<void()> callback) {
     }
     // Use the ungrouped and grouped hosts lists to retain locality structure in the priority set.
     priority_set_.updateHosts(0, HostSetImpl::partitionHosts(hosts_, hosts_per_locality_), {},
-                              *hosts_, {}, absl::nullopt, absl::nullopt);
+                              *hosts_, {}, server_context_.api().randomGenerator().random(),
+                              absl::nullopt, absl::nullopt);
 
     initialized_ = true;
   }

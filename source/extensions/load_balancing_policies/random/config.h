@@ -5,7 +5,6 @@
 #include "envoy/upstream/load_balancer.h"
 
 #include "source/common/common/logger.h"
-#include "source/common/upstream/load_balancer_impl.h"
 #include "source/extensions/load_balancing_policies/common/factory_base.h"
 
 namespace Envoy {
@@ -44,8 +43,8 @@ class Factory : public Common::FactoryBase<RandomLbProto, RandomCreator> {
 public:
   Factory() : FactoryBase("envoy.load_balancing_policies.random") {}
 
-  Upstream::LoadBalancerConfigPtr loadConfig(const Protobuf::Message& config,
-                                             ProtobufMessage::ValidationVisitor&) override {
+  Upstream::LoadBalancerConfigPtr loadConfig(Server::Configuration::ServerFactoryContext&,
+                                             const Protobuf::Message& config) override {
     auto typed_config = dynamic_cast<const RandomLbProto*>(&config);
     if (typed_config == nullptr) {
       return std::make_unique<EmptyRandomLbConfig>();

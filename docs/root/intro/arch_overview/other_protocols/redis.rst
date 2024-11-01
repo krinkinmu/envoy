@@ -127,13 +127,17 @@ Supported commands
 At the protocol level, pipelines are supported.
 Use pipelining wherever possible for the best performance.
 
-At the command level, Envoy only supports commands that can be reliably hashed to a server. AUTH and PING
+At the command level, Envoy only supports commands that can be reliably hashed to a server. AUTH, PING and ECHO
 are the only exceptions. AUTH is processed locally by Envoy if a downstream password has been configured,
 and no other commands will be processed until authentication is successful when a password has been
-configured. Envoy will transparently issue AUTH commands upon connecting to upstream servers, if upstream
-authentication passwords are configured for the cluster. Envoy responds to PING immediately with PONG.
-Arguments to PING are not allowed. All other supported commands must contain a key. Supported commands are
-functionally identical to the original Redis command except possibly in failure scenarios.
+configured. If an external authentication provider is set, Envoy will instead send the authentication arguments
+to an external service and act according to the authentication response. If a downstream password is set together
+with external authentication, the validation will be done still externally and the downstream password used for
+upstream authentication. Envoy will transparently issue AUTH commands upon connecting to upstream servers,
+if upstream authentication passwords are configured for the cluster. Envoy responds to PING immediately with PONG.
+Arguments to PING are not allowed. Envoy responds to ECHO immediately with the command argument.
+All other supported commands must contain a key. Supported commands are functionally identical to the
+original Redis command except possibly in failure scenarios.
 
 For details on each command's usage see the official
 `Redis command reference <https://redis.io/commands>`_.
@@ -143,6 +147,7 @@ For details on each command's usage see the official
   :widths: 1, 1
 
   AUTH, Authentication
+  ECHO, Connection
   PING, Connection
   QUIT, Connection
   DEL, Generic
@@ -198,6 +203,7 @@ For details on each command's usage see the official
   RPOP, List
   RPUSH, List
   RPUSHX, List
+  PUBLISH, Pubsub
   EVAL, Scripting
   EVALSHA, Scripting
   SADD, Set
@@ -208,6 +214,7 @@ For details on each command's usage see the official
   SRANDMEMBER, Set
   SREM, Set
   SSCAN, Set
+  WATCH, String
   ZADD, Sorted Set
   ZCARD, Sorted Set
   ZCOUNT, Sorted Set
@@ -237,6 +244,7 @@ For details on each command's usage see the official
   DECRBY, String
   GET, String
   GETBIT, String
+  GETDEL, String
   GETRANGE, String
   GETSET, String
   INCR, String
@@ -251,6 +259,26 @@ For details on each command's usage see the official
   SETNX, String
   SETRANGE, String
   STRLEN, String
+  XACK, Stream
+  XADD, Stream
+  XAUTOCLAIM, Stream
+  XCLAIM, Stream
+  XDEL, Stream
+  XLEN, Stream
+  XPENDING, Stream
+  XRANGE, Stream
+  XREVRANGE, Stream
+  XTRIM, Stream
+  BF.ADD, Bloom
+  BF.CARD, Bloom
+  BF.EXISTS, Bloom
+  BF.INFO, Bloom
+  BF.INSERT, Bloom
+  BF.LOADCHUNK, Bloom
+  BF.MADD, Bloom
+  BF.MEXISTS, Bloom
+  BF.RESERVE, Bloom
+  BF.SCANDUMP, Bloom
 
 Failure modes
 -------------
@@ -280,10 +308,11 @@ Envoy can also generate its own errors in response to the client.
   wrong number of arguments for command, "Certain commands check in Envoy that the number of
   arguments is correct."
   "NOAUTH Authentication required.", "The command was rejected because a downstream authentication
-  password has been set and the client has not successfully authenticated."
+  password or external authentication have been set and the client has not successfully authenticated."
   ERR invalid password, "The authentication command failed due to an invalid password."
+  ERR <external-message>, "The authentication command failed on the external auth provider."
   "ERR Client sent AUTH, but no password is set", "An authentication command was received, but no
-  downstream authentication password has been configured."
+  downstream authentication password or external authentication provider have been configured."
 
 
 In the case of MGET, each individual key that cannot be fetched will generate an error response.
@@ -298,3 +327,9 @@ response for each in place of the value.
   3) (error) upstream failure
   4) (error) upstream failure
   5) "echo"
+
+Protocol
+--------
+
+Although `RESP <https://redis.io/docs/reference/protocol-spec/>`_ is recommended for production use,
+`inline commands <https://redis.io/docs/reference/protocol-spec/#inline-commands>`_ are also supported.

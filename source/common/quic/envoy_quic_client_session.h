@@ -5,8 +5,11 @@
 #include "source/common/quic/envoy_quic_client_connection.h"
 #include "source/common/quic/envoy_quic_client_crypto_stream_factory.h"
 #include "source/common/quic/envoy_quic_client_stream.h"
+#include "source/common/quic/envoy_quic_network_observer_registry_factory.h"
 #include "source/common/quic/quic_filter_manager_connection_impl.h"
+#include "source/common/quic/quic_network_connectivity_observer.h"
 #include "source/common/quic/quic_stat_names.h"
+#include "source/common/quic/quic_transport_socket_factory.h"
 
 #include "quiche/quic/core/http/quic_spdy_client_session.h"
 
@@ -31,7 +34,8 @@ public:
       EnvoyQuicCryptoClientStreamFactoryInterface& crypto_stream_factory,
       QuicStatNames& quic_stat_names, OptRef<Http::HttpServerPropertiesCache> rtt_cache,
       Stats::Scope& scope,
-      const Network::TransportSocketOptionsConstSharedPtr& transport_socket_options);
+      const Network::TransportSocketOptionsConstSharedPtr& transport_socket_options,
+      OptRef<Network::UpstreamTransportSocketFactory> transport_socket_factory);
 
   ~EnvoyQuicClientSession() override;
 
@@ -57,20 +61,12 @@ public:
   void OnCanWrite() override;
   void OnHttp3GoAway(uint64_t stream_id) override;
   void OnTlsHandshakeComplete() override;
-  void MaybeSendRstStreamFrame(quic::QuicStreamId id, quic::QuicResetStreamError error,
-                               quic::QuicStreamOffset bytes_written) override;
   void OnRstStream(const quic::QuicRstStreamFrame& frame) override;
   void OnNewEncryptionKeyAvailable(quic::EncryptionLevel level,
                                    std::unique_ptr<quic::QuicEncrypter> encrypter) override;
 
-  quic::HttpDatagramSupport LocalHttpDatagramSupport() override {
-#ifdef ENVOY_ENABLE_HTTP_DATAGRAMS
-    if (Runtime::runtimeFeatureEnabled("envoy.reloadable_features.enable_connect_udp_support")) {
-      return quic::HttpDatagramSupport::kRfc;
-    }
-#endif
-    return quic::HttpDatagramSupport::kNone;
-  }
+  quic::HttpDatagramSupport LocalHttpDatagramSupport() override { return http_datagram_support_; }
+  std::vector<std::string> GetAlpnsToOffer() const override;
 
   // quic::QuicSpdyClientSessionBase
   bool ShouldKeepConnectionAlive() const override;
@@ -79,8 +75,7 @@ public:
 
   // PacketsToReadDelegate
   size_t numPacketsExpectedPerEventLoop() const override {
-    // Do one round of reading per active stream, or to see if there's a new
-    // active stream.
+    // Do one round of reading per active stream, or to see if there's a new active stream.
     return std::max<size_t>(1, GetNumActiveStreams()) * Network::NUM_DATAGRAMS_PER_RECEIVE;
   }
 
@@ -92,6 +87,9 @@ public:
 
   void OnServerPreferredAddressAvailable(
       const quic::QuicSocketAddress& server_preferred_address) override;
+
+  // Register this session to the given registry for receiving network change events.
+  void registerNetworkObserver(EnvoyQuicNetworkObserverRegistry& registry);
 
   using quic::QuicSpdyClientSession::PerformActionOnActiveStreams;
 
@@ -122,11 +120,14 @@ private:
   Http::ConnectionCallbacks* http_connection_callbacks_{nullptr};
   std::shared_ptr<quic::QuicCryptoClientConfig> crypto_config_;
   EnvoyQuicCryptoClientStreamFactoryInterface& crypto_stream_factory_;
-  QuicStatNames& quic_stat_names_;
   OptRef<Http::HttpServerPropertiesCache> rtt_cache_;
-  Stats::Scope& scope_;
   bool disable_keepalive_{false};
   Network::TransportSocketOptionsConstSharedPtr transport_socket_options_;
+  OptRef<QuicTransportSocketFactoryBase> transport_socket_factory_;
+  std::vector<std::string> configured_alpns_;
+  quic::HttpDatagramSupport http_datagram_support_ = quic::HttpDatagramSupport::kNone;
+  QuicNetworkConnectivityObserverPtr network_connectivity_observer_;
+  OptRef<EnvoyQuicNetworkObserverRegistry> registry_;
 };
 
 } // namespace Quic

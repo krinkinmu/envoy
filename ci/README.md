@@ -27,6 +27,10 @@ main commit at which the binary was compiled, and `latest` corresponds to a bina
 
 ## Windows 2019 Envoy image
 
+On August 31, 2023 the Envoy project ended official Windows support due to a lack of resources.
+We will continue to accept patches related to the Windows build. Until further notice, Windows
+builds are excluded from Envoy CI, as well as the Envoy release and security processes.
+
 The Windows 2019 based Envoy Docker image at [`envoyproxy/envoy-build-windows2019:<hash>`](https://hub.docker.com/r/envoyproxy/envoy-build-windows2019/)
 is used for CI checks, where `<hash>` is specified in [`envoy_build_sha.sh`](https://github.com/envoyproxy/envoy/blob/main/ci/envoy_build_sha.sh).
 Developers may work with the most recent `envoyproxy/envoy-build-windows2019` image to provide a self-contained environment for building Envoy binaries and
@@ -81,6 +85,15 @@ To force the Envoy build image to be refreshed by Docker you can set `ENVOY_DOCK
 ENVOY_DOCKER_PULL=true ./ci/run_envoy_docker.sh <build_script_args>
 ```
 
+
+# Generating compile commands
+
+The `./ci/do_ci.sh` script provides a CI target that generates compile commands for clangd or other tools.
+
+```bash
+ENVOY_GEN_COMPDB_OPTIONS="--vscode --exclude_contrib" ./ci/do_ci.sh refresh_compdb
+```
+
 ## On Linux
 
 An example basic invocation to build a developer version of the Envoy static binary (using the Bazel `fastbuild` type) is:
@@ -110,7 +123,7 @@ To enable the previous behavior of the `release.server_only` target where the fi
 (e.g. envoy-binary.tar.gz), you can run:
 
   ```bash
-  ./ci/run_envoy_docker.sh './ci/do_ci.sh release.server_only.binary
+  ./ci/run_envoy_docker.sh './ci/do_ci.sh release.server_only.binary'
   ```
 
 For a debug version of the Envoy binary you can run:
@@ -122,11 +135,18 @@ For a debug version of the Envoy binary you can run:
 The build artifact can be found in `/tmp/envoy-docker-build/envoy/source/exe/envoy-debug` (or wherever
 `$ENVOY_DOCKER_BUILD_DIR` points).
 
-To leverage a [bazel remote cache](https://github.com/envoyproxy/envoy/tree/main/bazel#advanced-caching-setup) add the remote cache endpoint to
-the BAZEL_BUILD_EXTRA_OPTIONS environment variable
+To leverage a [bazel remote cache](https://github.com/envoyproxy/envoy/tree/main/bazel#advanced-caching-setup):
+1. add bazel options like `--remote_cache` and/or `--remote_cache_header` to a `.bazelrc` file, such as `user.bazelrc`. For example
 
 ```bash
-./ci/run_envoy_docker.sh "BAZEL_BUILD_EXTRA_OPTIONS='--remote_cache=http://127.0.0.1:28080' ./ci/do_ci.sh release"
+build:my-remote-cache --remote_cache=grpcs://remotecache.googleapis.com
+build:my-remote-cache --remote_cache_header=Authorization="Bearer <token>"
+```
+
+2. specify the config in the `BAZEL_BUILD_EXTRA_OPTIONS` environment variable. Run
+
+```bash
+export BAZEL_BUILD_EXTRA_OPTIONS=--config=my-remote-cache
 ```
 
 The `./ci/run_envoy_docker.sh './ci/do_ci.sh <TARGET>'` targets are:
@@ -137,7 +157,7 @@ The `./ci/run_envoy_docker.sh './ci/do_ci.sh <TARGET>'` targets are:
 * `debug` &mdash; build Envoy static binary and run tests under `-c dbg`.
 * `debug <test>` &mdash; build Envoy static binary and run a specified test or test dir under `-c dbg`.
 * `debug.server_only` &mdash; build Envoy static binary under `-c dbg`.
-* `docker` &mdash; build Docker images, expects `release` or `release.server_only` to have been run furst.
+* `docker` &mdash; build Docker images, expects `release` or `release.server_only` to have been run first.
 * `dev` &mdash; build Envoy static binary and run tests under `-c fastbuild` with clang.
 * `dev <test>` &mdash; build Envoy static binary and run a specified test or test dir under `-c fastbuild` with clang.
 * `dev.contrib` &mdash; build Envoy static binary with contrib and run tests under `-c fastbuild` with clang.
@@ -161,6 +181,7 @@ The `./ci/run_envoy_docker.sh './ci/do_ci.sh <TARGET>'` targets are:
 * `clang_tidy <files>` &mdash; build and run clang-tidy specified source files, if no files specified, runs against the diff with the last GitHub commit.
 * `check_proto_format`&mdash; check configuration, formatting and build issues in API proto files.
 * `fix_proto_format`&mdash; fix configuration, formatting and build issues in API proto files.
+* `check_and_fix_proto_format` &mdash; check and fix configuration, fomatting and build issues in API proto files.
 * `format`&mdash; run validation, linting and formatting tools.
 * `docs`&mdash; build documentation tree in `generated/docs`.
 

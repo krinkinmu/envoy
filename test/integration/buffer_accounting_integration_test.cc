@@ -37,8 +37,6 @@ namespace {
 #define ASANITIZED /* Sanitized by GCC */
 #endif
 
-using testing::HasSubstr;
-
 std::string protocolTestParamsAndBoolToString(
     const ::testing::TestParamInfo<std::tuple<HttpProtocolTestParams, bool>>& params) {
   return fmt::format("{}_{}",
@@ -141,9 +139,6 @@ public:
     const HttpProtocolTestParams& protocol_test_params = std::get<0>(GetParam());
     setupHttp1ImplOverrides(protocol_test_params.http1_implementation);
     setupHttp2ImplOverrides(protocol_test_params.http2_implementation);
-    config_helper_.addRuntimeOverride(
-        Runtime::defer_processing_backedup_streams,
-        protocol_test_params.defer_processing_backedup_streams ? "true" : "false");
 
     setServerBufferFactory(buffer_factory_);
     setUpstreamProtocol(protocol_test_params.upstream_protocol);
@@ -154,9 +149,6 @@ protected:
   std::shared_ptr<Buffer::TrackedWatermarkBufferFactory> buffer_factory_;
 
   bool streamBufferAccounting() { return std::get<1>(GetParam()); }
-  bool deferProcessingBackedUpStreams() {
-    return Runtime::runtimeFeatureEnabled(Runtime::defer_processing_backedup_streams);
-  }
 
   std::string printAccounts() {
     std::stringstream stream;
@@ -586,7 +578,10 @@ TEST_P(ProtocolsBufferWatermarksTest, ResettingStreamUnregistersAccount) {
       ASSERT_TRUE(codec_client_->waitForDisconnect(std::chrono::milliseconds(10000)));
     } else {
       ASSERT_TRUE(response1->waitForReset());
-      EXPECT_EQ(response1->resetReason(), Http::StreamResetReason::RemoteReset);
+      EXPECT_EQ(response1->resetReason(),
+                (std::get<0>(GetParam()).downstream_protocol == Http::CodecType::HTTP2
+                     ? Http::StreamResetReason::RemoteReset
+                     : Http::StreamResetReason::OverloadManager));
     }
 
     // Wait for the upstream request to receive the reset to avoid a race when
@@ -643,6 +638,24 @@ public:
         });
   }
 
+  void runTest() {
+    config_helper_.setBufferLimits(16384, 131072);
+    initialize();
+
+    write_matcher_->setDestinationPort(fake_upstreams_[0]->localAddress()->ip()->port());
+
+    tcp_client_ = makeTcpConnection(lookupPort("tcp_proxy"));
+    ASSERT_TRUE(fake_upstreams_[0]->waitForHttpConnection(*dispatcher_, fake_upstream_connection_));
+    ASSERT_TRUE(fake_upstream_connection_->waitForNewStream(*dispatcher_, upstream_request_));
+    ASSERT_TRUE(upstream_request_->waitForHeadersComplete());
+    upstream_request_->encodeHeaders(default_response_headers_, false);
+
+    write_matcher_->setWriteReturnsEgain();
+    ASSERT_TRUE(tcp_client_->write(std::string(524288, 'a'), false));
+    test_server_->waitForCounterEq("tcp.tcp_stats.downstream_flow_control_paused_reading_total", 1);
+    tcp_client_->close();
+  }
+
 protected:
   IntegrationTcpClientPtr tcp_client_;
 };
@@ -656,20 +669,13 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(TcpTunnelingWatermarkIntegrationTest, MultipleReadDisableCallsIncrementsStatsOnce) {
   config_helper_.setBufferLimits(16384, 131072);
-  initialize();
+  runTest();
+}
 
-  write_matcher_->setDestinationPort(fake_upstreams_[0]->localAddress()->ip()->port());
-
-  tcp_client_ = makeTcpConnection(lookupPort("tcp_proxy"));
-  ASSERT_TRUE(fake_upstreams_[0]->waitForHttpConnection(*dispatcher_, fake_upstream_connection_));
-  ASSERT_TRUE(fake_upstream_connection_->waitForNewStream(*dispatcher_, upstream_request_));
-  ASSERT_TRUE(upstream_request_->waitForHeadersComplete());
-  upstream_request_->encodeHeaders(default_response_headers_, false);
-
-  write_matcher_->setWriteReturnsEgain();
-  ASSERT_TRUE(tcp_client_->write(std::string(524288, 'a'), false));
-  test_server_->waitForCounterEq("tcp.tcp_stats.downstream_flow_control_paused_reading_total", 1);
-  tcp_client_->close();
+TEST_P(TcpTunnelingWatermarkIntegrationTest,
+       MultipleReadDisableCallsIncrementsStatsOnceWithUpstreamFilters) {
+  config_helper_.addRuntimeOverride(Runtime::upstream_http_filters_with_tcp_proxy, "true");
+  runTest();
 }
 
 class Http2OverloadManagerIntegrationTest : public Http2BufferWatermarksTest,
@@ -878,105 +884,6 @@ TEST_P(Http2OverloadManagerIntegrationTest,
   EXPECT_EQ(smallest_response->headers().getStatusValue(), "200");
 }
 
-TEST_P(Http2OverloadManagerIntegrationTest, CanResetStreamIfEnvoyLevelStreamEnded) {
-  // This test is not applicable if expand_agnostic_stream_lifetime is enabled
-  // as the gap between lifetimes of the codec level and envoy level stream
-  // shrinks.
-  if (Runtime::runtimeFeatureEnabled(Runtime::expand_agnostic_stream_lifetime)) {
-    return;
-  }
-
-  useAccessLog("%RESPONSE_CODE%");
-  initializeOverloadManagerInBootstrap(
-      TestUtility::parseYaml<envoy::config::overload::v3::OverloadAction>(R"EOF(
-      name: "envoy.overload_actions.reset_high_memory_stream"
-      triggers:
-        - name: "envoy.resource_monitors.testonly.fake_resource_monitor"
-          scaled:
-            scaling_threshold: 0.90
-            saturation_threshold: 0.98
-    )EOF"));
-  initialize();
-
-  // Set 10MiB receive window for the client.
-  const int downstream_window_size = 10 * 1024 * 1024;
-  envoy::config::core::v3::Http2ProtocolOptions http2_options =
-      ::Envoy::Http2::Utility::initializeAndValidateOptions(
-          envoy::config::core::v3::Http2ProtocolOptions());
-  http2_options.mutable_initial_stream_window_size()->set_value(downstream_window_size);
-  http2_options.mutable_initial_connection_window_size()->set_value(downstream_window_size);
-  codec_client_ = makeRawHttpConnection(makeClientConnection(lookupPort("http")), http2_options);
-
-  // Makes us have Envoy's writes to downstream return EAGAIN
-  write_matcher_->setSourcePort(lookupPort("http"));
-  write_matcher_->setWriteReturnsEgain();
-
-  // Send a request
-  auto encoder_decoder = codec_client_->startRequest(Http::TestRequestHeaderMapImpl{
-      {":method", "POST"},
-      {":path", "/"},
-      {":scheme", "http"},
-      {":authority", "host"},
-      {"content-length", "10"},
-  });
-  auto& encoder = encoder_decoder.first;
-  const std::string data(10, 'a');
-  codec_client_->sendData(encoder, data, true);
-  auto response = std::move(encoder_decoder.second);
-
-  waitForNextUpstreamRequest();
-  FakeStreamPtr upstream_request_for_response = std::move(upstream_request_);
-
-  // Send the responses back. It is larger than the downstream's receive window
-  // size. Thus, the codec will not end the stream, but the Envoy level stream
-  // should.
-  upstream_request_for_response->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}},
-                                               false);
-  const int response_size = downstream_window_size + 1024; // Slightly over the window size.
-  upstream_request_for_response->encodeData(response_size, true);
-
-  if (streamBufferAccounting()) {
-    if (deferProcessingBackedUpStreams()) {
-      // Wait for an accumulation of data, as we cannot rely on the access log
-      // output since we're deferring the processing of the stream data.
-      EXPECT_TRUE(buffer_factory_->waitUntilTotalBufferedExceeds(10 * 10 * 1024));
-
-    } else {
-      // Wait for access log to know the Envoy level stream has been deleted.
-      EXPECT_THAT(waitForAccessLog(access_log_name_), HasSubstr("200"));
-    }
-  }
-
-  // Set the pressure so the overload action kills the response if doing stream
-  // accounting
-  updateResource(0.95);
-  test_server_->waitForGaugeEq(
-      "overload.envoy.overload_actions.reset_high_memory_stream.scale_percent", 62);
-
-  if (streamBufferAccounting()) {
-    test_server_->waitForCounterGe("envoy.overload_actions.reset_high_memory_stream.count", 1);
-  }
-
-  // Reduce resource pressure
-  updateResource(0.80);
-  test_server_->waitForGaugeEq(
-      "overload.envoy.overload_actions.reset_high_memory_stream.scale_percent", 0);
-
-  // Resume writes to downstream.
-  write_matcher_->setResumeWrites();
-
-  if (streamBufferAccounting()) {
-    EXPECT_TRUE(response->waitForReset());
-    EXPECT_TRUE(response->reset());
-  } else {
-    // If we're not doing the accounting, we didn't end up resetting the
-    // streams.
-    ASSERT_TRUE(response->waitForEndStream());
-    ASSERT_TRUE(response->complete());
-    EXPECT_EQ(response->headers().getStatusValue(), "200");
-  }
-}
-
 class Http2DeferredProcessingIntegrationTest : public Http2BufferWatermarksTest {
 public:
   Http2DeferredProcessingIntegrationTest() : registered_tee_factory_(tee_filter_factory_) {
@@ -1125,9 +1032,6 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_P(Http2DeferredProcessingIntegrationTest, CanBufferInDownstreamCodec) {
   config_helper_.setBufferLimits(1000, 1000);
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
 
   // Stop writes to the upstream.
   write_matcher_->setDestinationPort(fake_upstreams_[0]->localAddress()->ip()->port());
@@ -1170,9 +1074,6 @@ TEST_P(Http2DeferredProcessingIntegrationTest, CanBufferInDownstreamCodec) {
 TEST_P(Http2DeferredProcessingIntegrationTest, CanBufferInUpstreamCodec) {
   config_helper_.setBufferLimits(1000, 1000);
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
 
   // Stop writes to the downstream.
   write_matcher_->setSourcePort(lookupPort("http"));
@@ -1215,9 +1116,6 @@ TEST_P(Http2DeferredProcessingIntegrationTest, CanBufferInUpstreamCodec) {
 TEST_P(Http2DeferredProcessingIntegrationTest, CanDeferOnStreamCloseForUpstream) {
   config_helper_.setBufferLimits(1000, 1000);
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
 
   // Stop writes to the downstream.
   write_matcher_->setSourcePort(lookupPort("http"));
@@ -1260,9 +1158,6 @@ TEST_P(Http2DeferredProcessingIntegrationTest,
        ShouldCloseDeferredUpstreamOnStreamCloseIfLocalReply) {
   config_helper_.setBufferLimits(9000, 9000);
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
 
   // Stop writes to the downstream.
   write_matcher_->setSourcePort(lookupPort("http"));
@@ -1319,9 +1214,6 @@ TEST_P(Http2DeferredProcessingIntegrationTest,
        ShouldCloseDeferredUpstreamOnStreamCloseIfResetByDownstream) {
   config_helper_.setBufferLimits(1000, 1000);
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
 
   // Stop writes to the downstream.
   write_matcher_->setSourcePort(lookupPort("http"));
@@ -1366,9 +1258,6 @@ TEST_P(Http2DeferredProcessingIntegrationTest,
 TEST_P(Http2DeferredProcessingIntegrationTest, CanRoundRobinBetweenStreams) {
   config_helper_.setBufferLimits(10000, 10000);
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
 
   // Stop writes to the upstream.
   write_matcher_->setDestinationPort(fake_upstreams_[0]->localAddress()->ip()->port());
@@ -1466,9 +1355,6 @@ TEST_P(Http2DeferredProcessingIntegrationTest, CanRoundRobinBetweenStreams) {
 TEST_P(Http2DeferredProcessingIntegrationTest, RoundRobinWithStreamsExiting) {
   config_helper_.setBufferLimits(10000, 10000);
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
 
   // Stop writes to the downstream.
   write_matcher_->setSourcePort(lookupPort("http"));
@@ -1605,9 +1491,6 @@ TEST_P(Http2DeferredProcessingIntegrationTest, ChunkProcessesStreams) {
       });
 
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
 
   // Stop writes to the upstream.
   write_matcher_->setDestinationPort(fake_upstreams_[0]->localAddress()->ip()->port());
@@ -1718,9 +1601,6 @@ TEST_P(Http2DeferredProcessingIntegrationTest, ChunkProcessesStreams) {
 TEST_P(Http2DeferredProcessingIntegrationTest, CanDumpCrashInformationWhenProcessingBufferedData) {
   config_helper_.setBufferLimits(1000, 1000);
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
 
   EXPECT_DEATH(testCrashDumpWhenProcessingBufferedData(),
                "Crashing as request body over 1000!.*"
@@ -1732,9 +1612,6 @@ TEST_P(Http2DeferredProcessingIntegrationTest,
        CanDumpCrashInformationWhenProcessingBufferedDataOfDeferredCloseStream) {
   config_helper_.setBufferLimits(1000, 1000);
   initialize();
-  if (!deferProcessingBackedUpStreams()) {
-    return;
-  }
   EXPECT_DEATH(testCrashDumpWhenProcessingBufferedDataOfDeferredCloseStream(),
                "Crashing as response body over 1000!.*"
                "ActiveStream.*Http2::ConnectionImpl.*Dumping 1 Active Streams.*"

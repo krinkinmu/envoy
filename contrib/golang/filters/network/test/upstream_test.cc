@@ -5,6 +5,7 @@
 #include "source/common/network/filter_state_dst_address.h"
 
 #include "test/mocks/server/factory_context.h"
+#include "test/mocks/thread/mocks.h"
 #include "test/test_common/environment.h"
 #include "test/test_common/utility.h"
 
@@ -23,12 +24,6 @@ namespace NetworkFilters {
 namespace Golang {
 namespace {
 
-class MockThreadFactory : public Thread::ThreadFactory {
-public:
-  MOCK_METHOD(Thread::ThreadPtr, createThread, (std::function<void()>, Thread::OptionsOptConstRef));
-  MOCK_METHOD(Thread::ThreadId, currentThreadId, ());
-};
-
 class UpstreamConnTest : public testing::Test {
 public:
   UpstreamConnTest() { ENVOY_LOG_MISC(info, "test"); }
@@ -37,16 +32,17 @@ public:
   void initialize() {
     EXPECT_CALL(slot_allocator_, allocateSlot())
         .WillRepeatedly(Invoke(&slot_allocator_, &ThreadLocal::MockInstance::allocateSlotMock));
-    context_.cluster_manager_.initializeClusters({"plainText"}, {});
-    context_.cluster_manager_.initializeThreadLocalClusters({"plainText"});
-    ON_CALL(context_.api_, threadFactory()).WillByDefault(ReturnRef(thread_factory_));
+    context_.server_factory_context_.cluster_manager_.initializeClusters({"plainText"}, {});
+    context_.server_factory_context_.cluster_manager_.initializeThreadLocalClusters({"plainText"});
+    ON_CALL(context_.server_factory_context_.api_, threadFactory())
+        .WillByDefault(ReturnRef(thread_factory_));
     UpstreamConn::initThreadLocalStorage(context_, slot_allocator_);
     dso_ = std::make_shared<Dso::MockNetworkFilterDsoImpl>();
     upConn_ = std::make_shared<UpstreamConn>(addr_, dso_, 0, &dispatcher_);
   }
 
   ThreadLocal::MockInstance slot_allocator_;
-  NiceMock<MockThreadFactory> thread_factory_;
+  NiceMock<Thread::MockThreadFactory> thread_factory_;
   NiceMock<Server::Configuration::MockFactoryContext> context_;
   std::shared_ptr<Dso::MockNetworkFilterDsoImpl> dso_;
   NiceMock<Event::MockDispatcher> dispatcher_;
@@ -64,23 +60,29 @@ TEST_F(UpstreamConnTest, ConnectUpstream) {
           "envoy.network.transport_socket.original_dst_address");
   EXPECT_EQ(dst_addr->address()->asString(), addr_);
 
-  EXPECT_CALL(context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_, newConnection(_))
+  EXPECT_CALL(
+      context_.server_factory_context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_,
+      newConnection(_))
       .WillOnce(
           Invoke([&](Tcp::ConnectionPool::Callbacks& cb) -> Tcp::ConnectionPool::Cancellable* {
-            context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_.newConnectionImpl(cb);
-            context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_.poolReady(
-                upstream_connection_);
+            context_.server_factory_context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_
+                .newConnectionImpl(cb);
+            context_.server_factory_context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_
+                .poolReady(upstream_connection_);
             return nullptr;
           }));
   EXPECT_CALL(*dso_.get(), envoyGoFilterOnUpstreamConnectionReady(_, _));
   upConn_->connect();
 
-  EXPECT_CALL(context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_, newConnection(_))
+  EXPECT_CALL(
+      context_.server_factory_context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_,
+      newConnection(_))
       .WillOnce(
           Invoke([&](Tcp::ConnectionPool::Callbacks& cb) -> Tcp::ConnectionPool::Cancellable* {
-            context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_.newConnectionImpl(cb);
-            context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_.poolFailure(
-                ConnectionPool::PoolFailureReason::RemoteConnectionFailure, true);
+            context_.server_factory_context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_
+                .newConnectionImpl(cb);
+            context_.server_factory_context_.cluster_manager_.thread_local_cluster_.tcp_conn_pool_
+                .poolFailure(ConnectionPool::PoolFailureReason::RemoteConnectionFailure, true);
             return nullptr;
           }));
   EXPECT_CALL(*dso_.get(),
@@ -107,6 +109,9 @@ TEST_F(UpstreamConnTest, WriteAndClose) {
   auto data = std::make_unique<NiceMock<Envoy::Tcp::ConnectionPool::MockConnectionData>>();
   EXPECT_CALL(*data, connection()).WillRepeatedly(ReturnRef(upstream_connection_));
   upConn_->onPoolReady(std::move(data), nullptr);
+
+  EXPECT_CALL(upstream_connection_, enableHalfClose(true));
+  upConn_->enableHalfClose(true);
 
   Buffer::OwnedImpl someData("123");
   EXPECT_CALL(upstream_connection_, write(_, false));

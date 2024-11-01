@@ -46,11 +46,12 @@ protected:
   }
 
   void expectAdd(const std::string& cluster_name, const std::string& version = std::string("")) {
-    EXPECT_CALL(cm_, addOrUpdateCluster(WithName(cluster_name), version)).WillOnce(Return(true));
+    EXPECT_CALL(cm_, addOrUpdateCluster(WithName(cluster_name), version, false))
+        .WillOnce(Return(true));
   }
 
   void expectAddToThrow(const std::string& cluster_name, const std::string& exception_msg) {
-    EXPECT_CALL(cm_, addOrUpdateCluster(WithName(cluster_name), _))
+    EXPECT_CALL(cm_, addOrUpdateCluster(WithName(cluster_name), _, false))
         .WillOnce(Throw(EnvoyException(exception_msg)));
   }
 
@@ -91,7 +92,6 @@ resources:
   type: EDS
   eds_cluster_config:
     eds_config:
-      resource_api_version: V3
       path_config_source:
         path: eds path
 )EOF";
@@ -116,7 +116,7 @@ resources:
   auto response2 =
       TestUtility::parseYaml<envoy::service::discovery::v3::DiscoveryResponse>(response2_yaml);
   EXPECT_CALL(cm_, clusters()).WillOnce(Return(makeClusterInfoMaps({"cluster1"})));
-  EXPECT_CALL(cm_, removeCluster("cluster1")).WillOnce(Return(true));
+  EXPECT_CALL(cm_, removeCluster("cluster1", false)).WillOnce(Return(true));
   const auto decoded_resources_2 =
       TestUtility::decodeResources<envoy::config::cluster::v3::Cluster>(response2);
   EXPECT_TRUE(
@@ -218,7 +218,7 @@ TEST_F(CdsApiImplTest, DeltaConfigUpdate) {
     }
     Protobuf::RepeatedPtrField<std::string> removed;
     *removed.Add() = "cluster_1";
-    EXPECT_CALL(cm_, removeCluster(StrEq("cluster_1"))).WillOnce(Return(true));
+    EXPECT_CALL(cm_, removeCluster(StrEq("cluster_1"), false)).WillOnce(Return(true));
     const auto decoded_resources =
         TestUtility::decodeResources<envoy::config::cluster::v3::Cluster>(resources);
     EXPECT_TRUE(cds_callbacks_->onConfigUpdate(decoded_resources.refvec_, removed, "v2").ok());
@@ -265,7 +265,6 @@ resources:
   type: EDS
   eds_cluster_config:
     eds_config:
-      resource_api_version: V3
       path_config_source:
         path: eds path
 - "@type": type.googleapis.com/envoy.config.cluster.v3.Cluster
@@ -273,7 +272,6 @@ resources:
   type: EDS
   eds_cluster_config:
     eds_config:
-      resource_api_version: V3
       path_config_source:
         path: eds path
 )EOF";
@@ -299,7 +297,6 @@ resources:
   type: EDS
   eds_cluster_config:
     eds_config:
-      resource_api_version: V3
       path_config_source:
         path: eds path
 - "@type": type.googleapis.com/envoy.config.cluster.v3.Cluster
@@ -307,7 +304,6 @@ resources:
   type: EDS
   eds_cluster_config:
     eds_config:
-      resource_api_version: V3
       path_config_source:
         path: eds path
 )EOF";
@@ -317,7 +313,7 @@ resources:
   EXPECT_CALL(cm_, clusters()).WillOnce(Return(makeClusterInfoMaps({"cluster1", "cluster2"})));
   expectAdd("cluster1", "1");
   expectAdd("cluster3", "1");
-  EXPECT_CALL(cm_, removeCluster("cluster2"));
+  EXPECT_CALL(cm_, removeCluster("cluster2", false));
   const auto decoded_resources_2 =
       TestUtility::decodeResources<envoy::config::cluster::v3::Cluster>(response2);
   EXPECT_TRUE(
@@ -340,7 +336,6 @@ resources:
   type: EDS
   eds_cluster_config:
     eds_config:
-      resource_api_version: V3
       path_config_source:
         path: eds path
 - "@type": type.googleapis.com/envoy.config.cluster.v3.Cluster
@@ -348,7 +343,6 @@ resources:
   type: EDS
   eds_cluster_config:
     eds_config:
-      resource_api_version: V3
       path_config_source:
         path: eds path
 )EOF";

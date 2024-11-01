@@ -34,7 +34,6 @@ envoy_cc_library(
     name = "message_validator_lib",
     srcs = ["message_validator_impl.cc"],
     hdrs = ["message_validator_impl.h"],
-    external_deps = ["protobuf"],
     deps = [
         "//envoy/protobuf:message_validator_interface",
         "//envoy/stats:stats_interface",
@@ -42,18 +41,17 @@ envoy_cc_library(
         "//source/common/common:hash_lib",
         "//source/common/common:logger_lib",
         "//source/common/common:macros",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
 envoy_cc_library(
     name = "protobuf",
     hdrs = ["protobuf.h"],
-    external_deps = [
-        "protobuf",
-    ],
     deps = [
         ":cc_wkt_protos",
         "//envoy/common:base_includes",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
@@ -72,10 +70,6 @@ envoy_cc_library(
 envoy_cc_library(
     name = "yaml_utility_lib",
     srcs = envoy_select_enable_yaml(["yaml_utility.cc"]),
-    external_deps = [
-        "protobuf",
-        "yaml_cpp",
-    ],
     deps = [
         ":message_validator_lib",
         ":protobuf",
@@ -87,7 +81,9 @@ envoy_cc_library(
         "//source/common/common:utility_lib",
         "//source/common/protobuf:visitor_lib",
         "//source/common/runtime:runtime_features_lib",
-        "@com_github_cncf_udpa//udpa/annotations:pkg_cc_proto",
+        "@com_github_cncf_xds//udpa/annotations:pkg_cc_proto",
+        "@com_github_jbeder_yaml_cpp//:yaml-cpp",
+        "@com_google_protobuf//:protobuf",
         "@envoy_api//envoy/annotations:pkg_cc_proto",
         "@envoy_api//envoy/type/v3:pkg_cc_proto",
         "@utf8_range//:utf8_validity",
@@ -99,11 +95,9 @@ envoy_cc_library(
     srcs = [
         "create_reflectable_message.cc",
     ],
-    external_deps = [
-        "protobuf",
-    ],
     deps = [
         "utility_lib_header",
+        "@com_google_protobuf//:protobuf",
     ] + envoy_select_enable_lite_protos([
         "@envoy_api//bazel/cc_proto_descriptor_library:create_dynamic_message",
         "@envoy_api//bazel/cc_proto_descriptor_library:text_format_transcoder",
@@ -200,12 +194,21 @@ envoy_cc_library(
 )
 
 envoy_cc_library(
+    name = "deterministic_hash_lib",
+    srcs = ["deterministic_hash.cc"],
+    hdrs = ["deterministic_hash.h"],
+    deps = [
+        ":protobuf",
+        "//source/common/common:assert_lib",
+        "//source/common/common:hash_lib",
+    ],
+)
+
+envoy_cc_library(
     name = "utility_lib",
     srcs = ["utility.cc"],
-    external_deps = [
-        "protobuf",
-    ],
     deps = [
+        ":deterministic_hash_lib",
         ":message_validator_lib",
         ":protobuf",
         ":utility_lib_header",
@@ -216,7 +219,8 @@ envoy_cc_library(
         "//source/common/common:utility_lib",
         "//source/common/protobuf:visitor_lib",
         "//source/common/runtime:runtime_features_lib",
-        "@com_github_cncf_udpa//udpa/annotations:pkg_cc_proto",
+        "@com_github_cncf_xds//udpa/annotations:pkg_cc_proto",
+        "@com_google_protobuf//:protobuf",
         "@envoy_api//envoy/annotations:pkg_cc_proto",
         "@envoy_api//envoy/type/v3:pkg_cc_proto",
     ] + envoy_select_enable_yaml(["yaml_utility_lib"]),
@@ -237,7 +241,7 @@ envoy_cc_library(
         ":message_validator_lib",
         ":protobuf",
         ":utility_lib_header",
-        "@com_github_cncf_udpa//udpa/type/v1:pkg_cc_proto",
-        "@com_github_cncf_udpa//xds/type/v3:pkg_cc_proto",
+        "@com_github_cncf_xds//udpa/type/v1:pkg_cc_proto",
+        "@com_github_cncf_xds//xds/type/v3:pkg_cc_proto",
     ],
 )

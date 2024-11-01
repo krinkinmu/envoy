@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.chromium.net.BidirectionalStream;
 import org.chromium.net.ExperimentalBidirectionalStream;
+import org.chromium.net.ExperimentalUrlRequest;
 import org.chromium.net.NetworkQualityRttListener;
 import org.chromium.net.NetworkQualityThroughputListener;
 import org.chromium.net.RequestFinishedInfo;
@@ -30,7 +31,6 @@ import org.chromium.net.UrlRequest;
 import org.chromium.net.impl.CronvoyVersionSafeCallbacks.RequestFinishedInfoListener;
 import org.chromium.net.urlconnection.CronvoyHttpURLConnection;
 import org.chromium.net.urlconnection.CronvoyURLStreamHandlerFactory;
-import org.chromium.net.impl.CronvoyLogger;
 
 /**
  * Cronvoy engine shim.
@@ -48,7 +48,7 @@ public final class CronvoyUrlRequestContext extends CronvoyEngineBase {
   private final Object mLock = new Object();
   private final ConditionVariable mInitCompleted = new ConditionVariable(false);
   private final AtomicInteger mActiveRequestCount = new AtomicInteger(0);
-  private EnvoyEngine.LogLevel mLogLevel = EnvoyEngine.LogLevel.OFF;
+  private EnvoyEngine.LogLevel mLogLevel;
 
   @GuardedBy("mLock") private EnvoyEngine mEngine;
   /**
@@ -61,9 +61,8 @@ public final class CronvoyUrlRequestContext extends CronvoyEngineBase {
   private Thread mNetworkThread;
 
   private final String mUserAgent;
-  private final CronvoyEngineBuilderImpl mBuilder;
   private final AtomicReference<Runnable> mInitializationCompleter = new AtomicReference<>();
-  private final CronvoyLogger mCronvoyLogger = new CronvoyLogger();
+  private final CronvoyLogger mCronvoyLogger;
 
   /**
    * Locks operations on the list of RequestFinishedInfo.Listeners, because operations can happen
@@ -77,7 +76,6 @@ public final class CronvoyUrlRequestContext extends CronvoyEngineBase {
       new HashMap<>();
 
   public CronvoyUrlRequestContext(NativeCronvoyEngineBuilderImpl builder) {
-    mBuilder = builder;
     // On android, all background threads (and all threads that are part
     // of background processes) are put in a cgroup that is allowed to
     // consume up to 5% of CPU - these worker threads spend the vast
@@ -87,8 +85,9 @@ public final class CronvoyUrlRequestContext extends CronvoyEngineBase {
     final int threadPriority =
         builder.threadPriority(THREAD_PRIORITY_BACKGROUND + THREAD_PRIORITY_MORE_FAVORABLE);
     mUserAgent = builder.getUserAgent();
+    mLogLevel = builder.getLogLevel();
+    mCronvoyLogger = builder.getLogger();
     synchronized (mLock) {
-
       mEngine = builder.createEngine(() -> {
         mNetworkThread = Thread.currentThread();
         android.os.Process.setThreadPriority(threadPriority);
@@ -113,8 +112,6 @@ public final class CronvoyUrlRequestContext extends CronvoyEngineBase {
     }
   }
 
-  CronvoyEngineBuilderImpl getBuilder() { return mBuilder; }
-
   void setTaskToExecuteWhenInitializationIsCompleted(Runnable runnable) {
     if (!mInitializationCompleter.compareAndSet(null, runnable)) {
       // The fact that the initializationCompleter was not null implies that the initialization
@@ -136,7 +133,8 @@ public final class CronvoyUrlRequestContext extends CronvoyEngineBase {
       checkHaveAdapter();
       return new CronvoyUrlRequest(this, url, callback, executor, mUserAgent, allowDirectExecutor,
                                    requestAnnotations, trafficStatsTagSet, trafficStatsTag,
-                                   trafficStatsUidSet, trafficStatsUid, requestFinishedListener);
+                                   trafficStatsUidSet, trafficStatsUid, requestFinishedListener,
+                                   idempotency == ExperimentalUrlRequest.Builder.IDEMPOTENT);
     }
   }
 

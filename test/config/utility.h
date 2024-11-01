@@ -14,6 +14,7 @@
 #include "envoy/config/listener/v3/listener_components.pb.h"
 #include "envoy/config/route/v3/route_components.pb.h"
 #include "envoy/extensions/filters/network/http_connection_manager/v3/http_connection_manager.pb.h"
+#include "envoy/extensions/filters/udp/udp_proxy/v3/udp_proxy.pb.h"
 #include "envoy/extensions/transport_sockets/tls/v3/cert.pb.h"
 #include "envoy/extensions/transport_sockets/tls/v3/common.pb.h"
 #include "envoy/extensions/upstreams/http/v3/http_protocol_options.pb.h"
@@ -34,6 +35,8 @@ class ConfigHelper {
 public:
   using HttpConnectionManager =
       envoy::extensions::filters::network::http_connection_manager::v3::HttpConnectionManager;
+  using UdpProxyConfig = envoy::extensions::filters::udp::udp_proxy::v3::UdpProxyConfig;
+
   struct ServerSslOptions {
     ServerSslOptions& setAllowExpiredCertificate(bool allow) {
       allow_expired_certificate_ = allow;
@@ -55,6 +58,11 @@ public:
       return *this;
     }
 
+    ServerSslOptions& setEcdsaCertName(const std::string& ecdsa_cert_name) {
+      ecdsa_cert_name_ = ecdsa_cert_name;
+      return *this;
+    }
+
     ServerSslOptions& setEcdsaCertOcspStaple(bool ecdsa_cert_ocsp_staple) {
       ecdsa_cert_ocsp_staple_ = ecdsa_cert_ocsp_staple;
       return *this;
@@ -67,6 +75,16 @@ public:
 
     ServerSslOptions& setTlsV13(bool tlsv1_3) {
       tlsv1_3_ = tlsv1_3;
+      return *this;
+    }
+
+    ServerSslOptions& setPreferClientCiphers(bool prefer_client_ciphers) {
+      prefer_client_ciphers_ = prefer_client_ciphers;
+      return *this;
+    }
+
+    ServerSslOptions& setCiphers(const std::vector<std::string>& ciphers) {
+      ciphers_ = ciphers;
       return *this;
     }
 
@@ -121,15 +139,23 @@ public:
       return *this;
     }
 
+    ServerSslOptions& setTlsCertSelector(std::string yaml) {
+      tls_cert_selector_yaml_ = yaml;
+      return *this;
+    }
+
     bool allow_expired_certificate_{};
-    envoy::config::core::v3::TypedExtensionConfig* custom_validator_config_;
+    envoy::config::core::v3::TypedExtensionConfig* custom_validator_config_{nullptr};
     bool rsa_cert_{true};
     bool rsa_cert_ocsp_staple_{true};
     bool ecdsa_cert_{false};
+    std::string ecdsa_cert_name_{"server_ecdsa"};
     bool ecdsa_cert_ocsp_staple_{false};
+    bool prefer_client_ciphers_{false};
     bool ocsp_staple_required_{false};
     bool tlsv1_3_{false};
     std::vector<std::string> curves_;
+    std::vector<std::string> ciphers_;
     bool expect_client_ecdsa_cert_{false};
     bool keylog_local_filter_{false};
     bool keylog_remote_filter_{false};
@@ -140,6 +166,7 @@ public:
     Network::Address::IpVersion ip_version_{Network::Address::IpVersion::v4};
     std::vector<envoy::extensions::transport_sockets::tls::v3::SubjectAltNameMatcher>
         san_matchers_{};
+    std::string tls_cert_selector_yaml_{""};
     bool client_with_intermediate_cert_{false};
     bool trust_root_only_{false};
     absl::optional<uint32_t> max_verify_depth_{absl::nullopt};
@@ -159,13 +186,15 @@ public:
 
   static void
   initializeTls(const ServerSslOptions& options,
-                envoy::extensions::transport_sockets::tls::v3::CommonTlsContext& common_context);
+                envoy::extensions::transport_sockets::tls::v3::CommonTlsContext& common_context,
+                bool http3);
 
   static void initializeTlsKeyLog(
       envoy::extensions::transport_sockets::tls::v3::CommonTlsContext& common_tls_context,
       const ServerSslOptions& options);
   using ConfigModifierFunction = std::function<void(envoy::config::bootstrap::v3::Bootstrap&)>;
   using HttpModifierFunction = std::function<void(HttpConnectionManager&)>;
+  using UdpProxyModifierFunction = std::function<void(UdpProxyConfig&)>;
 
   // A basic configuration (admin port, cluster_0, no listeners) with no network filters.
   static std::string baseConfigNoListeners();
@@ -303,8 +332,8 @@ public:
   void addVirtualHost(const envoy::config::route::v3::VirtualHost& vhost);
 
   // Add an HTTP filter prior to existing filters.
-  // By default, this prepends a downstream filter, but if downstream is set to
-  // false it will prepend an upstream filter.
+  // By default, this prepends a downstream HTTP filter, but if downstream is set to
+  // false it will prepend an upstream HTTP filter.
   void prependFilter(const std::string& filter_yaml, bool downstream = true);
 
   // Add an HTTP filter prior to existing filters.
@@ -336,7 +365,8 @@ public:
   void addSslConfig() { addSslConfig({}); }
 
   // Add the default SSL configuration for QUIC downstream.
-  void addQuicDownstreamTransportSocketConfig(bool enable_early_data);
+  void addQuicDownstreamTransportSocketConfig(bool enable_early_data,
+                                              std::vector<absl::string_view> custom_alpns);
 
   // Set the HTTP access log for the first HCM (if present) to a given file. The default is
   // the platform's null device.
@@ -356,6 +386,10 @@ public:
   // Allows callers to easily modify the HttpConnectionManager configuration.
   // Modifiers will be applied just before ports are modified in finalize
   void addConfigModifier(HttpModifierFunction function);
+
+  // Allows callers to easily modify the UDP Proxy configuration.
+  // Modifiers will be applied just before ports are modified in finalize
+  void addConfigModifier(UdpProxyModifierFunction function);
 
   // Allows callers to easily modify the filter named 'name' from the first filter chain from the
   // first listener. Modifiers will be applied just before ports are modified in finalize
@@ -442,6 +476,11 @@ public:
   // Take the contents of the provided HCM proto and stuff them into the first HCM
   // struct of the first listener.
   void storeHttpConnectionManager(const HttpConnectionManager& hcm);
+  // Load the first UDP Proxy from the first listener into a parsed proto.
+  bool loadUdpProxyFilter(UdpProxyConfig& udp_proxy);
+  // Take the contents of the provided UDP Proxy and stuff them into the first HCM
+  // struct of the first listener.
+  void storeUdpProxyFilter(const UdpProxyConfig& udp_proxy);
 
 private:
   // Load the first FilterType struct from the first listener into a parsed proto.
@@ -464,8 +503,34 @@ private:
     filter_config_any->PackFrom(filter);
   }
 
+  // Load the first FilterType struct from the first listener filters into a parsed proto.
+  template <class FilterType> bool loadListenerFilter(const std::string& name, FilterType& filter) {
+    RELEASE_ASSERT(!finalized_, "");
+    auto* filter_config = getListenerFilterFromListener(name);
+    if (filter_config) {
+      auto* config = filter_config->mutable_typed_config();
+      filter = MessageUtil::anyConvert<FilterType>(*config);
+      return true;
+    }
+    return false;
+  }
+
+  // Take the contents of the provided FilterType proto and stuff them into the first FilterType
+  // struct of the first listener.
+  template <class FilterType>
+  void storeListenerFilter(const std::string& name, const FilterType& filter) {
+    RELEASE_ASSERT(!finalized_, "");
+    auto* filter_config_any = getListenerFilterFromListener(name)->mutable_typed_config();
+
+    filter_config_any->PackFrom(filter);
+  }
+
   // Finds the filter named 'name' from the first filter chain from the first listener.
   envoy::config::listener::v3::Filter* getFilterFromListener(const std::string& name);
+
+  // Finds the filter named 'name' from the first listener filter from the first listener.
+  envoy::config::listener::v3::ListenerFilter*
+  getListenerFilterFromListener(const std::string& name);
 
   // The bootstrap proto Envoy will start up with.
   envoy::config::bootstrap::v3::Bootstrap bootstrap_;

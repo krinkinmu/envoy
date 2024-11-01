@@ -18,9 +18,12 @@ std::shared_ptr<grpc::ChannelCredentials> CredsUtility::getChannelCredentials(
     case envoy::config::core::v3::GrpcService::GoogleGrpc::ChannelCredentials::
         CredentialSpecifierCase::kSslCredentials: {
       const auto& ssl_credentials = google_grpc.channel_credentials().ssl_credentials();
-      const auto root_certs = Config::DataSource::read(ssl_credentials.root_certs(), true, api);
-      const auto private_key = Config::DataSource::read(ssl_credentials.private_key(), true, api);
-      const auto cert_chain = Config::DataSource::read(ssl_credentials.cert_chain(), true, api);
+      const auto root_certs = THROW_OR_RETURN_VALUE(
+          Config::DataSource::read(ssl_credentials.root_certs(), true, api), std::string);
+      const auto private_key = THROW_OR_RETURN_VALUE(
+          Config::DataSource::read(ssl_credentials.private_key(), true, api), std::string);
+      const auto cert_chain = THROW_OR_RETURN_VALUE(
+          Config::DataSource::read(ssl_credentials.cert_chain(), true, api), std::string);
       grpc::experimental::TlsChannelCredentialsOptions options;
       if (!private_key.empty() || !cert_chain.empty()) {
         options.set_certificate_provider(
@@ -163,8 +166,8 @@ class DefaultGoogleGrpcCredentialsFactory : public GoogleGrpcCredentialsFactory 
 public:
   std::shared_ptr<grpc::ChannelCredentials>
   getChannelCredentials(const envoy::config::core::v3::GrpcService& grpc_service_config,
-                        Api::Api& api) override {
-    return CredsUtility::defaultChannelCredentials(grpc_service_config, api);
+                        Server::Configuration::CommonFactoryContext& context) override {
+    return CredsUtility::defaultChannelCredentials(grpc_service_config, context.api());
   }
 
   std::string name() const override { return "envoy.grpc_credentials.default"; }

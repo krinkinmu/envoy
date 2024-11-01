@@ -68,6 +68,18 @@ private:
 #define ENVOY_SOCKET_IPV6_FREEBIND Network::SocketOptionName()
 #endif
 
+#ifdef IP_RECVTOS
+#define ENVOY_SOCKET_IP_RECVTOS ENVOY_MAKE_SOCKET_OPTION_NAME(IPPROTO_IP, IP_RECVTOS)
+#else
+#define ENVOY_SOCKET_IP_RECVTOS Network::SocketOptionName()
+#endif
+
+#ifdef IPV6_RECVTCLASS
+#define ENVOY_SOCKET_IPV6_RECVTCLASS ENVOY_MAKE_SOCKET_OPTION_NAME(IPPROTO_IPV6, IPV6_RECVTCLASS)
+#else
+#define ENVOY_SOCKET_IPV6_RECVTCLASS Network::SocketOptionName()
+#endif
+
 #ifdef SO_KEEPALIVE
 #define ENVOY_SOCKET_SO_KEEPALIVE ENVOY_MAKE_SOCKET_OPTION_NAME(SOL_SOCKET, SO_KEEPALIVE)
 #else
@@ -163,6 +175,25 @@ static_assert(IP_RECVDSTADDR == IP_SENDSRCADDR);
 #define ENVOY_ATTACH_REUSEPORT_CBPF Network::SocketOptionName()
 #endif
 
+#if !defined(ANDROID) && defined(__APPLE__)
+// Only include TargetConditionals after testing ANDROID as some Android builds
+// on the Mac have this header available and it's not needed unless the target
+// is really an Apple platform.
+#include <TargetConditionals.h>
+#if !defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE
+// MAC_OS
+#define ENVOY_IP_DONTFRAG ENVOY_MAKE_SOCKET_OPTION_NAME(IPPROTO_IP, IP_DONTFRAG)
+#define ENVOY_IPV6_DONTFRAG ENVOY_MAKE_SOCKET_OPTION_NAME(IPPROTO_IPV6, IPV6_DONTFRAG)
+#endif
+#endif
+
+#if !defined(ENVOY_IP_DONTFRAG) && defined(IP_PMTUDISC_DO)
+#define ENVOY_IP_MTU_DISCOVER ENVOY_MAKE_SOCKET_OPTION_NAME(IPPROTO_IP, IP_MTU_DISCOVER)
+#define ENVOY_IP_MTU_DISCOVER_VALUE IP_PMTUDISC_DO
+#define ENVOY_IPV6_MTU_DISCOVER ENVOY_MAKE_SOCKET_OPTION_NAME(IPPROTO_IPV6, IPV6_MTU_DISCOVER)
+#define ENVOY_IPV6_MTU_DISCOVER_VALUE IPV6_PMTUDISC_DO
+#endif
+
 /**
  * Interface representing a single filter chain info.
  */
@@ -175,6 +206,8 @@ public:
    */
   virtual absl::string_view name() const PURE;
 };
+
+class ListenerInfo;
 
 using FilterChainInfoConstSharedPtr = std::shared_ptr<const FilterChainInfo>;
 
@@ -253,6 +286,11 @@ public:
    * @return the filter chain info provider backing this socket.
    */
   virtual OptRef<const FilterChainInfo> filterChainInfo() const PURE;
+
+  /**
+   * @return the listener info backing this socket.
+   */
+  virtual OptRef<const ListenerInfo> listenerInfo() const PURE;
 };
 
 class ConnectionInfoSetter : public ConnectionInfoProvider {
@@ -324,6 +362,11 @@ public:
    * @param filter_chain_info the filter chain info provider backing this socket.
    */
   virtual void setFilterChainInfo(FilterChainInfoConstSharedPtr filter_chain_info) PURE;
+
+  /**
+   * @param listener_info the listener info provider backing this socket.
+   */
+  virtual void setListenerInfo(std::shared_ptr<const ListenerInfo> listener_info) PURE;
 };
 
 using ConnectionInfoSetterSharedPtr = std::shared_ptr<ConnectionInfoSetter>;
@@ -530,6 +573,13 @@ public:
    * @return the socket options stored earlier with addOption() and addOptions() calls, if any.
    */
   virtual const OptionsSharedPtr& options() const PURE;
+
+  /**
+   * @return a ParentDrainedCallbackRegistrar for UDP listen sockets during hot restart.
+   */
+  virtual OptRef<class ParentDrainedCallbackRegistrar> parentDrainedCallbackRegistrar() const {
+    return absl::nullopt;
+  }
 };
 
 using SocketPtr = std::unique_ptr<Socket>;

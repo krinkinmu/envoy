@@ -9,6 +9,7 @@
 
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "re2/re2.h"
 
 namespace Envoy {
 namespace Extensions {

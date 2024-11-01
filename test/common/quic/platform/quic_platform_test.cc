@@ -14,7 +14,7 @@
 
 #include "test/common/buffer/utility.h"
 #include "test/common/stats/stat_test_utility.h"
-#include "test/extensions/transport_sockets/tls/ssl_test_utility.h"
+#include "test/common/tls/ssl_test_utility.h"
 #include "test/mocks/api/mocks.h"
 #include "test/test_common/logging.h"
 #include "test/test_common/network_utility.h"
@@ -110,17 +110,9 @@ TEST_F(QuicPlatformTest, QuicClientStats) {
 
 TEST_F(QuicPlatformTest, QuicExpectBug) {
   auto bug = [](const char* error_message) { QUIC_BUG(bug_id) << error_message; };
-
   auto peer_bug = [](const char* error_message) { QUIC_PEER_BUG(bug_id) << error_message; };
   EXPECT_QUIC_BUG(bug("bug one is expected"), "bug one");
   EXPECT_QUIC_BUG(bug("bug two is expected"), "bug two");
-#ifdef NDEBUG
-  // The 3rd triggering in release mode should not be logged.
-  EXPECT_LOG_NOT_CONTAINS("error", "bug three", bug("bug three is expected"));
-#else
-  EXPECT_QUIC_BUG(bug("bug three is expected"), "bug three");
-#endif
-
   EXPECT_QUIC_PEER_BUG(peer_bug("peer_bug_1 is expected"), "peer_bug_1");
   EXPECT_QUIC_PEER_BUG(peer_bug("peer_bug_2 is expected"), "peer_bug_2");
 }
@@ -371,7 +363,7 @@ TEST_F(QuicPlatformTest, QuicMutex) {
   mu.AssertReaderHeld();
   mu.WriterUnlock();
   {
-    QuicReaderMutexLock rmu(&mu);
+    quiche::QuicheReaderMutexLock rmu(&mu);
     mu.AssertReaderHeld();
   }
   mu.WriterLock();
@@ -446,6 +438,12 @@ TEST_F(QuicPlatformTest, QuicFlags) {
   EXPECT_FALSE(GetQuicheFlag(quiche_oghttp2_debug_trace));
 }
 
+TEST_F(QuicPlatformTest, QuicheLogDFatalNoExit) {
+  quiche::test::QuicheScopedDisableExitOnDFatal scoped_object;
+  QUIC_LOG(DFATAL) << "This shouldn't call abort()";
+  QUICHE_DCHECK(false) << "This shouldn't call abort()";
+}
+
 TEST_F(QuicPlatformTest, UpdateReloadableFlags) {
   auto& flag_registry = quiche::FlagRegistry::getInstance();
 
@@ -454,20 +452,20 @@ TEST_F(QuicPlatformTest, UpdateReloadableFlags) {
 
   // Flip both flags to a non-default value.
   flag_registry.updateReloadableFlags(
-      {{"FLAGS_envoy_quic_reloadable_flag_quic_testonly_default_false", true},
-       {"FLAGS_envoy_quic_reloadable_flag_quic_testonly_default_true", false}});
+      {{"FLAGS_envoy_quiche_reloadable_flag_quic_testonly_default_false", true},
+       {"FLAGS_envoy_quiche_reloadable_flag_quic_testonly_default_true", false}});
   EXPECT_TRUE(GetQuicReloadableFlag(quic_testonly_default_false));
   EXPECT_FALSE(GetQuicReloadableFlag(quic_testonly_default_true));
 
   // Flip one flag back to a default value.
   flag_registry.updateReloadableFlags(
-      {{"FLAGS_envoy_quic_reloadable_flag_quic_testonly_default_false", false}});
+      {{"FLAGS_envoy_quiche_reloadable_flag_quic_testonly_default_false", false}});
   EXPECT_FALSE(GetQuicReloadableFlag(quic_testonly_default_false));
   EXPECT_FALSE(GetQuicReloadableFlag(quic_testonly_default_true));
 
   // Flip the other back to a default value.
   flag_registry.updateReloadableFlags(
-      {{"FLAGS_envoy_quic_reloadable_flag_quic_testonly_default_true", true}});
+      {{"FLAGS_envoy_quiche_reloadable_flag_quic_testonly_default_true", true}});
   EXPECT_FALSE(GetQuicReloadableFlag(quic_testonly_default_false));
   EXPECT_TRUE(GetQuicReloadableFlag(quic_testonly_default_true));
 }

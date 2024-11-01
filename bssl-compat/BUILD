@@ -15,7 +15,6 @@ cmake(
     visibility = ["//visibility:public"],
     generate_crosstool_file = False,
     env = { "Clang_ROOT" : "/usr/lib/llvm" },
-
     build_args = [ "-j" ]
 )
 

@@ -52,12 +52,12 @@ public:
     // Note, we need to set it through `MockFactoryContext` rather than `MockAsyncClientManager`
     // directly because the rate limit client object below requires context argument as the input.
     if (external_inited_) {
-      EXPECT_CALL(context.cluster_manager_.async_client_manager_,
+      EXPECT_CALL(context.server_factory_context_.cluster_manager_.async_client_manager_,
                   getOrCreateRawAsyncClient(_, _, _))
           .Times(2)
           .WillRepeatedly(Invoke(this, &RateLimitTestClient::mockCreateAsyncClient));
     } else {
-      EXPECT_CALL(context.cluster_manager_.async_client_manager_,
+      EXPECT_CALL(context.server_factory_context_.cluster_manager_.async_client_manager_,
                   getOrCreateRawAsyncClientWithHashKey(_, _, _))
           .WillOnce(Invoke(this, &RateLimitTestClient::mockCreateAsyncClient));
     }
@@ -70,12 +70,12 @@ public:
   }
 
   Grpc::RawAsyncClientSharedPtr mockCreateAsyncClient(Unused, Unused, Unused) {
-    auto async_client = std::make_shared<Grpc::MockAsyncClient>();
-    EXPECT_CALL(*async_client, startRaw("envoy.service.rate_limit_quota.v3.RateLimitQuotaService",
-                                        "StreamRateLimitQuotas", _, _))
-        .WillOnce(Invoke(this, &RateLimitTestClient::mockStartRaw));
+    async_client_ = std::make_shared<Grpc::MockAsyncClient>();
+    EXPECT_CALL(*async_client_, startRaw("envoy.service.rate_limit_quota.v3.RateLimitQuotaService",
+                                         "StreamRateLimitQuotas", _, _))
+        .WillRepeatedly(Invoke(this, &RateLimitTestClient::mockStartRaw));
 
-    return async_client;
+    return async_client_;
   }
 
   Grpc::RawAsyncStream* mockStartRaw(Unused, Unused, Grpc::RawAsyncStreamCallbacks& callbacks,
@@ -97,7 +97,7 @@ public:
   Grpc::RawAsyncStreamCallbacks* stream_callbacks_;
   Grpc::Status::GrpcStatus grpc_status_ = Grpc::Status::WellKnownGrpcStatus::Ok;
   RateLimitClientPtr client_;
-  // std::unique_ptr<RateLimitClient> client_;
+  std::shared_ptr<Grpc::MockAsyncClient> async_client_ = nullptr;
   MockRateLimitQuotaCallbacks callbacks_;
   bool external_inited_ = false;
   bool start_failed_ = false;

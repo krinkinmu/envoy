@@ -9,3 +9,5 @@ Quic extensions
   ../../extensions/quic/proof_source/v3/*
   ../../extensions/quic/connection_id_generator/v3/*
   ../../extensions/quic/server_preferred_address/v3/*
+  ../../extensions/quic/connection_debug_visitor/v3/*
+  ../../extensions/quic/connection_debug_visitor/quic_stats/v3/*

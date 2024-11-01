@@ -18,13 +18,13 @@ namespace LocalReply {
 
 class BodyFormatter {
 public:
-  BodyFormatter()
-      : formatter_(std::make_unique<Envoy::Formatter::FormatterImpl>("%LOCAL_REPLY_BODY%")),
-        content_type_(Http::Headers::get().ContentTypeValues.Text) {}
+  BodyFormatter() : content_type_(Http::Headers::get().ContentTypeValues.Text) {}
 
   BodyFormatter(const envoy::config::core::v3::SubstitutionFormatString& config,
-                Server::Configuration::CommonFactoryContext& context)
-      : formatter_(Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config, context)),
+                Server::Configuration::GenericFactoryContext& context)
+      : formatter_(THROW_OR_RETURN_VALUE(
+            Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config, context),
+            Formatter::FormatterBasePtr<Formatter::HttpFormatterContext>)),
         content_type_(
             !config.content_type().empty() ? config.content_type()
             : config.format_case() ==
@@ -37,8 +37,13 @@ public:
               const Http::ResponseTrailerMap& response_trailers,
               const StreamInfo::StreamInfo& stream_info, std::string& body,
               absl::string_view& content_type) const {
-    body = formatter_->formatWithContext(
-        {&request_headers, &response_headers, &response_trailers, body}, stream_info);
+    // No specific formatter is provided and the default formatter %LOCAL_REPLY_BODY% will
+    // be used. That means the body will be the same as the original body and we don't need
+    // to format it.
+    if (formatter_ != nullptr) {
+      body = formatter_->formatWithContext(
+          {&request_headers, &response_headers, &response_trailers, body}, stream_info);
+    }
     content_type = content_type_;
   }
 
@@ -61,14 +66,17 @@ public:
       status_code_ = static_cast<Http::Code>(config.status_code().value());
     }
     if (config.has_body()) {
-      body_ = Config::DataSource::read(config.body(), true, context.api());
+      body_ = THROW_OR_RETURN_VALUE(
+          Config::DataSource::read(config.body(), true, context.serverFactoryContext().api()),
+          std::string);
     }
 
     if (config.has_body_format_override()) {
       body_formatter_ = std::make_unique<BodyFormatter>(config.body_format_override(), context);
     }
 
-    header_parser_ = Envoy::Router::HeaderParser::configure(config.headers_to_add());
+    header_parser_ = THROW_OR_RETURN_VALUE(
+        Envoy::Router::HeaderParser::configure(config.headers_to_add()), HeaderParserPtr);
   }
 
   bool matchAndRewrite(const Http::RequestHeaderMap& request_headers,
@@ -78,8 +86,8 @@ public:
                        BodyFormatter*& final_formatter) const {
     // If not matched, just bail out.
     if (filter_ == nullptr ||
-        !filter_->evaluate(stream_info, request_headers, response_headers, response_trailers,
-                           AccessLog::AccessLogType::NotSet)) {
+        !filter_->evaluate({&request_headers, &response_headers, &response_trailers},
+                           stream_info)) {
       return false;
     }
 
@@ -87,7 +95,7 @@ public:
       body = body_.value();
     }
 
-    header_parser_->evaluateHeaders(response_headers, request_headers, response_headers,
+    header_parser_->evaluateHeaders(response_headers, {&request_headers, &response_headers},
                                     stream_info);
 
     if (status_code_.has_value() && code != status_code_.value()) {

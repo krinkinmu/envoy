@@ -285,7 +285,7 @@ public:
     EXPECT_CALL(*connection_, connect());
     EXPECT_CALL(*connection_, setConnectionStats(_));
     EXPECT_CALL(*connection_, noDelay(true));
-    EXPECT_CALL(*connection_, streamInfo());
+    EXPECT_CALL(*connection_, streamInfo()).Times(AnyNumber());
     EXPECT_CALL(*connection_, id()).Times(AnyNumber());
     EXPECT_CALL(*connection_, readDisable(_)).Times(AnyNumber());
     EXPECT_CALL(*connection_, initializeReadFilters());
@@ -1182,7 +1182,6 @@ TEST_F(TcpConnPoolImplTest, TestIdleTimeout) {
   c1.releaseConn();
   conn_pool_->test_conns_[0].connection_->raiseEvent(Network::ConnectionEvent::RemoteClose);
 
-  EXPECT_CALL(idle_callback, Call());
   conn_pool_->drainConnections(Envoy::ConnectionPool::DrainBehavior::DrainAndDelete);
   EXPECT_CALL(*conn_pool_, onConnDestroyedForTest());
   dispatcher_.clearDeferredDeleteList();

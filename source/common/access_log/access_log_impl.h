@@ -10,7 +10,6 @@
 #include "envoy/config/accesslog/v3/accesslog.pb.h"
 #include "envoy/config/typed_config.h"
 #include "envoy/runtime/runtime.h"
-#include "envoy/server/access_log_config.h"
 #include "envoy/type/v3/percent.pb.h"
 
 #include "source/common/common/matchers.h"
@@ -35,7 +34,7 @@ public:
    * Read a filter definition from proto and instantiate a concrete filter class.
    */
   static FilterPtr fromProto(const envoy::config::accesslog::v3::AccessLogFilter& config,
-                             Server::Configuration::CommonFactoryContext& context);
+                             Server::Configuration::FactoryContext& context);
 };
 
 /**
@@ -62,9 +61,8 @@ public:
       : ComparisonFilter(config.comparison(), runtime) {}
 
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 };
 
 /**
@@ -77,9 +75,8 @@ public:
       : ComparisonFilter(config.comparison(), runtime) {}
 
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 };
 
 /**
@@ -89,7 +86,7 @@ class OperatorFilter : public Filter {
 public:
   OperatorFilter(
       const Protobuf::RepeatedPtrField<envoy::config::accesslog::v3::AccessLogFilter>& configs,
-      Server::Configuration::CommonFactoryContext& context);
+      Server::Configuration::FactoryContext& context);
 
 protected:
   std::vector<FilterPtr> filters_;
@@ -101,12 +98,11 @@ protected:
 class AndFilter : public OperatorFilter {
 public:
   AndFilter(const envoy::config::accesslog::v3::AndFilter& config,
-            Server::Configuration::CommonFactoryContext& context);
+            Server::Configuration::FactoryContext& context);
 
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 };
 
 /**
@@ -115,12 +111,11 @@ public:
 class OrFilter : public OperatorFilter {
 public:
   OrFilter(const envoy::config::accesslog::v3::OrFilter& config,
-           Server::Configuration::CommonFactoryContext& context);
+           Server::Configuration::FactoryContext& context);
 
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 };
 
 /**
@@ -131,9 +126,8 @@ public:
   NotHealthCheckFilter() = default;
 
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 };
 
 /**
@@ -142,9 +136,8 @@ public:
 class TraceableRequestFilter : public Filter {
 public:
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 };
 
 /**
@@ -156,9 +149,8 @@ public:
                 Random::RandomGenerator& random);
 
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 
 private:
   Runtime::Loader& runtime_;
@@ -173,12 +165,12 @@ private:
  */
 class HeaderFilter : public Filter {
 public:
-  HeaderFilter(const envoy::config::accesslog::v3::HeaderFilter& config);
+  HeaderFilter(const envoy::config::accesslog::v3::HeaderFilter& config,
+               Server::Configuration::CommonFactoryContext& context);
 
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 
 private:
   const Http::HeaderUtility::HeaderDataPtr header_data_;
@@ -192,12 +184,12 @@ public:
   ResponseFlagFilter(const envoy::config::accesslog::v3::ResponseFlagFilter& config);
 
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 
 private:
-  uint64_t configured_flags_{};
+  const bool has_configured_flags_{};
+  std::vector<bool> configured_flags_{};
 };
 
 /**
@@ -213,9 +205,8 @@ public:
   GrpcStatusFilter(const envoy::config::accesslog::v3::GrpcStatusFilter& config);
 
   // AccessLog::Filter
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 
 private:
   GrpcStatusHashSet statuses_;
@@ -238,9 +229,8 @@ public:
 
   LogTypeFilter(const envoy::config::accesslog::v3::LogTypeFilter& filter_config);
 
-  bool evaluate(const StreamInfo::StreamInfo&, const Http::RequestHeaderMap&,
-                const Http::ResponseHeaderMap&, const Http::ResponseTrailerMap&,
-                AccessLogType access_log_type) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 
 private:
   LogTypeHashSet types_;
@@ -252,11 +242,11 @@ private:
  */
 class MetadataFilter : public Filter {
 public:
-  MetadataFilter(const envoy::config::accesslog::v3::MetadataFilter& filter_config);
+  MetadataFilter(const envoy::config::accesslog::v3::MetadataFilter& filter_config,
+                 Server::Configuration::CommonFactoryContext& context);
 
-  bool evaluate(const StreamInfo::StreamInfo& info, const Http::RequestHeaderMap& request_headers,
-                const Http::ResponseHeaderMap& response_headers,
-                const Http::ResponseTrailerMap& response_trailers, AccessLogType) const override;
+  bool evaluate(const Formatter::HttpFormatterContext& context,
+                const StreamInfo::StreamInfo& info) const override;
 
 private:
   Matchers::ValueMatcherConstSharedPtr present_matcher_;
@@ -269,27 +259,6 @@ private:
 };
 
 /**
- * Extension filter factory that reads from ExtensionFilter proto.
- */
-class ExtensionFilterFactory : public Config::TypedFactory {
-public:
-  ~ExtensionFilterFactory() override = default;
-
-  /**
-   * Create a particular extension filter implementation from a config proto. If the
-   * implementation is unable to produce a filter with the provided parameters, it should throw an
-   * EnvoyException. The returned pointer should never be nullptr.
-   * @param config supplies the custom configuration for this filter type.
-   * @param context supplies the server factory context.
-   * @return an instance of extension filter implementation from a config proto.
-   */
-  virtual FilterPtr createFilter(const envoy::config::accesslog::v3::ExtensionFilter& config,
-                                 Server::Configuration::CommonFactoryContext& context) PURE;
-
-  std::string category() const override { return "envoy.access_loggers.extension_filters"; }
-};
-
-/**
  * Access log factory that reads the configuration from proto.
  */
 class AccessLogFactory {
@@ -298,58 +267,8 @@ public:
    * Read a filter definition from proto and instantiate an Instance. This method is used
    * to create access log instances that need access to listener properties.
    */
-  static InstanceSharedPtr
-  fromProto(const envoy::config::accesslog::v3::AccessLog& config,
-            Server::Configuration::ListenerAccessLogFactoryContext& context);
-
-  /**
-   * Read a filter definition from proto and instantiate an Instance. This method does not
-   * have access to listener properties, for example for access loggers of admin interface.
-   */
   static InstanceSharedPtr fromProto(const envoy::config::accesslog::v3::AccessLog& config,
-                                     Server::Configuration::CommonFactoryContext& context);
-
-  /**
-   * Template method to create an access log filter from proto configuration for non-HTTP access
-   * loggers.
-   */
-  template <class Context>
-  static FilterBasePtr<Context>
-  accessLogFilterFromProto(const envoy::config::accesslog::v3::AccessLogFilter& config,
-                           Server::Configuration::CommonFactoryContext& context) {
-    if (!config.has_extension_filter()) {
-      ExceptionUtil::throwEnvoyException(
-          "Access log filter: only extension filter is supported by non-HTTP access loggers.");
-    }
-
-    auto& factory = Config::Utility::getAndCheckFactory<ExtensionFilterFactoryBase<Context>>(
-        config.extension_filter());
-    auto typed_filter_config = Config::Utility::translateToFactoryConfig(
-        config.extension_filter(), context.messageValidationVisitor(), factory);
-
-    return factory.createFilter(*typed_filter_config, context);
-  }
-
-  /**
-   * Template method to create an access logger instance from proto configuration for non-HTTP
-   * access loggers.
-   */
-  template <class Context>
-  static InstanceBaseSharedPtr<Context>
-  accessLoggerFromProto(const envoy::config::accesslog::v3::AccessLog& config,
-                        Server::Configuration::CommonFactoryContext& context) {
-    FilterBasePtr<Context> filter;
-    if (config.has_filter()) {
-      filter = accessLogFilterFromProto<Context>(config.filter(), context);
-    }
-
-    auto& factory =
-        Config::Utility::getAndCheckFactory<AccessLogInstanceFactoryBase<Context>>(config);
-    ProtobufTypes::MessagePtr message = Config::Utility::translateToFactoryConfig(
-        config, context.messageValidationVisitor(), factory);
-
-    return factory.createAccessLogInstance(*message, std::move(filter), context);
-  }
+                                     Server::Configuration::FactoryContext& context);
 };
 
 } // namespace AccessLog

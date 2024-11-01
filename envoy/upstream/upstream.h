@@ -23,7 +23,6 @@
 #include "envoy/stats/scope.h"
 #include "envoy/stats/stats.h"
 #include "envoy/upstream/health_check_host_monitor.h"
-#include "envoy/upstream/load_balancer_type.h"
 #include "envoy/upstream/locality.h"
 #include "envoy/upstream/outlier_detection.h"
 #include "envoy/upstream/resource_manager.h"
@@ -99,7 +98,7 @@ public:
    *   from cluster config. If the bind config from the cluster manager, the param
    *   is empty.
    */
-  virtual UpstreamLocalAddressSelectorConstSharedPtr
+  virtual absl::StatusOr<UpstreamLocalAddressSelectorConstSharedPtr>
   createLocalAddressSelector(std::vector<UpstreamLocalAddress> upstream_local_addresses,
                              absl::optional<std::string> cluster_name) const PURE;
 
@@ -149,7 +148,9 @@ public:
   /* is not meant to be routed to. */                                            \
   m(EXCLUDED_VIA_IMMEDIATE_HC_FAIL, 0x80)                                        \
   /* The host failed active HC due to timeout. */                                \
-  m(ACTIVE_HC_TIMEOUT, 0x100)
+  m(ACTIVE_HC_TIMEOUT, 0x100)                                                    \
+  /* The host is currently marked as draining by EDS */                          \
+  m(EDS_STATUS_DRAINING, 0x200)
   // clang-format on
 
 #define DECLARE_ENUM(name, value) name = value,
@@ -268,27 +269,6 @@ public:
   virtual HealthStatus edsHealthStatus() const PURE;
 
   /**
-   * Set the host's health checker monitor. Monitors are assumed to be thread safe, however
-   * a new monitor must be installed before the host is used across threads. Thus,
-   * this routine should only be called on the main thread before the host is used across threads.
-   */
-  virtual void setHealthChecker(HealthCheckHostMonitorPtr&& health_checker) PURE;
-
-  /**
-   * Set the host's outlier detector monitor. Outlier detector monitors are assumed to be thread
-   * safe, however a new outlier detector monitor must be installed before the host is used across
-   * threads. Thus, this routine should only be called on the main thread before the host is used
-   * across threads.
-   */
-  virtual void setOutlierDetector(Outlier::DetectorHostMonitorPtr&& outlier_detector) PURE;
-
-  /**
-   * Set the timestamp of when the host has transitioned from unhealthy to healthy state via an
-   * active health checking.
-   */
-  virtual void setLastHcPassTime(MonotonicTime last_hc_pass_time) PURE;
-
-  /**
    * @return the current load balancing weight of the host, in the range 1-128 (see
    * envoy.api.v2.endpoint.Endpoint.load_balancing_weight).
    */
@@ -320,6 +300,36 @@ public:
    * Set true to disable active health check for the host.
    */
   virtual void setDisableActiveHealthCheck(bool disable_active_health_check) PURE;
+
+  /**
+   * Base interface for attaching LbPolicy-specific data to individual hosts.
+   */
+  class HostLbPolicyData {
+  public:
+    virtual ~HostLbPolicyData() = default;
+  };
+  using HostLbPolicyDataPtr = std::unique_ptr<HostLbPolicyData>;
+
+  /**
+   * Set load balancing policy related data to the host.
+   * NOTE: this method should only be called at main thread before the host is used
+   * across worker threads.
+   */
+  virtual void setLbPolicyData(HostLbPolicyDataPtr lb_policy_data) PURE;
+
+  /**
+   * Get the load balancing policy related data of the host.
+   * @return the optional reference to the load balancing policy related data of the host.
+   */
+  virtual OptRef<HostLbPolicyData> lbPolicyData() const PURE;
+
+  /**
+   * Get the typed load balancing policy related data of the host.
+   * @return the optional reference to the typed load balancing policy related data of the host.
+   */
+  template <class HostLbPolicyDataType> OptRef<HostLbPolicyDataType> typedLbPolicyData() const {
+    return makeOptRefFromPtr(dynamic_cast<HostLbPolicyDataType*>(lbPolicyData().ptr()));
+  }
 };
 
 using HostConstSharedPtr = std::shared_ptr<const Host>;
@@ -531,10 +541,10 @@ using HostSetPtr = std::unique_ptr<HostSet>;
 class PrioritySet {
 public:
   using MemberUpdateCb =
-      std::function<void(const HostVector& hosts_added, const HostVector& hosts_removed)>;
+      std::function<absl::Status(const HostVector& hosts_added, const HostVector& hosts_removed)>;
 
-  using PriorityUpdateCb = std::function<void(uint32_t priority, const HostVector& hosts_added,
-                                              const HostVector& hosts_removed)>;
+  using PriorityUpdateCb = std::function<absl::Status(
+      uint32_t priority, const HostVector& hosts_added, const HostVector& hosts_removed)>;
 
   virtual ~PrioritySet() = default;
 
@@ -594,6 +604,7 @@ public:
    * @param locality_weights supplies a map from locality to associated weight.
    * @param hosts_added supplies the hosts added since the last update.
    * @param hosts_removed supplies the hosts removed since the last update.
+   * @param seed a random number to initialize the locality load-balancing algorithm.
    * @param weighted_priority_health if present, overwrites the current weighted_priority_health.
    * @param overprovisioning_factor if present, overwrites the current overprovisioning_factor.
    * @param cross_priority_host_map read only cross-priority host map which is created in the main
@@ -602,7 +613,7 @@ public:
   virtual void updateHosts(uint32_t priority, UpdateHostsParams&& update_hosts_params,
                            LocalityWeightsConstSharedPtr locality_weights,
                            const HostVector& hosts_added, const HostVector& hosts_removed,
-                           absl::optional<bool> weighted_priority_health,
+                           uint64_t seed, absl::optional<bool> weighted_priority_health,
                            absl::optional<uint32_t> overprovisioning_factor,
                            HostMapConstSharedPtr cross_priority_host_map = nullptr) PURE;
 
@@ -626,7 +637,7 @@ public:
     virtual void updateHosts(uint32_t priority, UpdateHostsParams&& update_hosts_params,
                              LocalityWeightsConstSharedPtr locality_weights,
                              const HostVector& hosts_added, const HostVector& hosts_removed,
-                             absl::optional<bool> weighted_priority_health,
+                             uint64_t seed, absl::optional<bool> weighted_priority_health,
                              absl::optional<uint32_t> overprovisioning_factor) PURE;
   };
 
@@ -771,11 +782,14 @@ public:
 
 /**
  * All cluster load report stats. These are only use for EDS load reporting and not sent to the
- * stats sink. See envoy.api.v2.endpoint.ClusterStats for the definition of upstream_rq_dropped.
- * These are latched by LoadStatsReporter, independent of the normal stats sink flushing.
+ * stats sink. See envoy.config.endpoint.v3.ClusterStats for the definition of
+ * total_dropped_requests and dropped_requests, which correspond to the upstream_rq_dropped and
+ * upstream_rq_drop_overload counter here. These are latched by LoadStatsReporter, independent of
+ * the normal stats sink flushing.
  */
 #define ALL_CLUSTER_LOAD_REPORT_STATS(COUNTER, GAUGE, HISTOGRAM, TEXT_READOUT, STATNAME)           \
-  COUNTER(upstream_rq_dropped)
+  COUNTER(upstream_rq_dropped)                                                                     \
+  COUNTER(upstream_rq_drop_overload)
 
 /**
  * Cluster circuit breakers gauges. Note that we do not generate a stats
@@ -1016,24 +1030,16 @@ public:
   virtual OptRef<const LoadBalancerConfig> loadBalancerConfig() const PURE;
 
   /**
-   * @return the load balancer factory for this cluster if the load balancing type is
-   * LOAD_BALANCING_POLICY_CONFIG.
-   * TODO(wbpcode): change the return type to return a reference after
-   * 'envoy_reloadable_features_convert_legacy_lb_config' is removed. The factory should never be
-   * nullptr when the load balancing type is LOAD_BALANCING_POLICY_CONFIG.
+   * @return the load balancer factory for this cluster. Cluster will always has a valid load
+   * balancer factory if it is created successfully.
    */
-  virtual TypedLoadBalancerFactory* loadBalancerFactory() const PURE;
+  virtual TypedLoadBalancerFactory& loadBalancerFactory() const PURE;
 
   /**
    * @return const envoy::config::cluster::v3::Cluster::CommonLbConfig& the common configuration for
    * all load balancers for this cluster.
    */
   virtual const envoy::config::cluster::v3::Cluster::CommonLbConfig& lbConfig() const PURE;
-
-  /**
-   * @return the type of load balancing that the cluster should use.
-   */
-  virtual LoadBalancerType lbType() const PURE;
 
   /**
    * @return the service discovery type to use for resolving the cluster.
@@ -1045,38 +1051,6 @@ public:
    */
   virtual OptRef<const envoy::config::cluster::v3::Cluster::CustomClusterType>
   clusterType() const PURE;
-
-  /**
-   * @return configuration for round robin load balancing, only used if LB type is round robin.
-   */
-  virtual OptRef<const envoy::config::cluster::v3::Cluster::RoundRobinLbConfig>
-  lbRoundRobinConfig() const PURE;
-
-  /**
-   * @return configuration for least request load balancing, only used if LB type is least request.
-   */
-  virtual OptRef<const envoy::config::cluster::v3::Cluster::LeastRequestLbConfig>
-  lbLeastRequestConfig() const PURE;
-
-  /**
-   * @return configuration for ring hash load balancing, only used if type is set to ring_hash_lb.
-   */
-  virtual OptRef<const envoy::config::cluster::v3::Cluster::RingHashLbConfig>
-  lbRingHashConfig() const PURE;
-
-  /**
-   * @return configuration for maglev load balancing, only used if type is set to maglev_lb.
-   */
-  virtual OptRef<const envoy::config::cluster::v3::Cluster::MaglevLbConfig>
-  lbMaglevConfig() const PURE;
-
-  /**
-   * @return const absl::optional<envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>& the
-   * configuration for the Original Destination load balancing policy, only used if type is set to
-   *         ORIGINAL_DST_LB.
-   */
-  virtual OptRef<const envoy::config::cluster::v3::Cluster::OriginalDstLbConfig>
-  lbOriginalDstConfig() const PURE;
 
   /**
    * @return const absl::optional<envoy::config::core::v3::TypedExtensionConfig>& the configuration
@@ -1104,6 +1078,11 @@ public:
    * reset if the number of headers exceeds this value.
    */
   virtual uint32_t maxResponseHeadersCount() const PURE;
+
+  /**
+   * @return uint32_t the maximum total size of response headers in KB.
+   */
+  virtual absl::optional<uint16_t> maxResponseHeadersKb() const PURE;
 
   /**
    * @return the human readable name of the cluster.
@@ -1173,14 +1152,14 @@ public:
   virtual ClusterTimeoutBudgetStatsOptRef timeoutBudgetStats() const PURE;
 
   /**
+   * @return true if this cluster should produce per-endpoint stats.
+   */
+  virtual bool perEndpointStatsEnabled() const PURE;
+
+  /**
    * @return std::shared_ptr<UpstreamLocalAddressSelector> as upstream local address selector.
    */
   virtual UpstreamLocalAddressSelectorConstSharedPtr getUpstreamLocalAddressSelector() const PURE;
-
-  /**
-   * @return the configuration for load balancer subsets.
-   */
-  virtual const LoadBalancerSubsetInfo& lbSubsetInfo() const PURE;
 
   /**
    * @return const envoy::config::core::v3::Metadata& the configuration metadata for this cluster.
@@ -1265,6 +1244,18 @@ public:
    */
   virtual Http::ClientHeaderValidatorPtr makeHeaderValidator(Http::Protocol protocol) const PURE;
 
+  /**
+   * @return OptRef<const envoy::config::cluster::v3::Cluster::HappyEyeballsConfig>
+   * an optional value of the configuration for happy eyeballs for this cluster.
+   */
+  virtual OptRef<const envoy::config::cluster::v3::UpstreamConnectionOptions::HappyEyeballsConfig>
+  happyEyeballsConfig() const PURE;
+
+  /**
+   * @return Reference to the optional config for LRS endpoint metric reporting.
+   */
+  virtual OptRef<const std::vector<std::string>> lrsReportMetricNames() const PURE;
+
 protected:
   /**
    * Invoked by extensionProtocolOptionsTyped.
@@ -1334,6 +1325,26 @@ public:
    * @return the const PrioritySet for the cluster.
    */
   virtual const PrioritySet& prioritySet() const PURE;
+
+  /**
+   * @return the cluster drop_overload configuration.
+   */
+  virtual UnitFloat dropOverload() const PURE;
+
+  /**
+   * @return the cluster drop_category_ configuration.
+   */
+  virtual const std::string& dropCategory() const PURE;
+
+  /**
+   * Set up the drop_overload value for the cluster.
+   */
+  virtual void setDropOverload(UnitFloat drop_overload) PURE;
+
+  /**
+   * Set up the drop_category value for the thread local cluster.
+   */
+  virtual void setDropCategory(absl::string_view drop_category) PURE;
 };
 
 using ClusterSharedPtr = std::shared_ptr<Cluster>;
@@ -1348,7 +1359,7 @@ namespace fmt {
 // fmt formatter class for Host
 template <> struct formatter<Envoy::Upstream::Host> : formatter<absl::string_view> {
   template <typename FormatContext>
-  auto format(const Envoy::Upstream::Host& host, FormatContext& ctx) -> decltype(ctx.out()) {
+  auto format(const Envoy::Upstream::Host& host, FormatContext& ctx) const -> decltype(ctx.out()) {
     absl::string_view out = !host.hostname().empty() ? host.hostname()
                             : host.address()         ? host.address()->asStringView()
                                                      : "<empty>";

@@ -17,6 +17,7 @@
 
 #include "test/common/http/common.h"
 #include "test/common/http/http2/http2_frame.h"
+#include "test/common/memory/memory_test_utility.h"
 #include "test/common/stats/stat_test_utility.h"
 #include "test/mocks/http/mocks.h"
 #include "test/mocks/init/mocks.h"
@@ -33,7 +34,6 @@
 #include "codec_impl_test_util.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "quiche/http2/adapter/callback_visitor.h"
 #include "quiche/http2/adapter/nghttp2_adapter.h"
 
 using testing::_;
@@ -117,8 +117,7 @@ enum class Http2Impl {
 };
 
 using Http2SettingsTuple = ::testing::tuple<uint32_t, uint32_t, uint32_t, uint32_t>;
-using Http2SettingsTestParam =
-    ::testing::tuple<Http2SettingsTuple, Http2SettingsTuple, Http2Impl, bool>;
+using Http2SettingsTestParam = ::testing::tuple<Http2SettingsTuple, Http2SettingsTuple, Http2Impl>;
 namespace CommonUtility = ::Envoy::Http2::Utility;
 
 class Http2CodecImplTestFixture {
@@ -185,10 +184,9 @@ public:
 
   Http2CodecImplTestFixture() = default;
   Http2CodecImplTestFixture(Http2SettingsTuple client_settings, Http2SettingsTuple server_settings,
-                            Http2Impl http2_implementation, bool defer_processing_backedup_streams)
+                            Http2Impl http2_implementation)
       : client_settings_(client_settings), server_settings_(server_settings),
-        http2_implementation_(http2_implementation),
-        defer_processing_backedup_streams_(defer_processing_backedup_streams) {
+        http2_implementation_(http2_implementation) {
     // Make sure we explicitly test for stream flush timer creation.
     EXPECT_CALL(client_connection_.dispatcher_, createTimer_(_)).Times(0);
     EXPECT_CALL(server_connection_.dispatcher_, createTimer_(_)).Times(0);
@@ -230,11 +228,12 @@ public:
     }
   }
 
+  static Status onConnBeginHeaders(ConnectionImpl* conn, int stream_id) {
+    return conn->onBeginHeaders(stream_id);
+  }
+
   virtual void initialize() {
     setupHttp2Overrides();
-    scoped_runtime_.mergeValues({{std::string(Runtime::defer_processing_backedup_streams),
-                                  defer_processing_backedup_streams_ ? "true" : "false"}});
-
     http2OptionsFromTuple(client_http2_options_, client_settings_);
     http2OptionsFromTuple(server_http2_options_, server_settings_);
     client_ = std::make_unique<TestClientConnectionImpl>(
@@ -417,7 +416,6 @@ public:
   absl::optional<const Http2SettingsTuple> client_settings_;
   absl::optional<const Http2SettingsTuple> server_settings_;
   Http2Impl http2_implementation_ = Http2Impl::Nghttp2;
-  bool defer_processing_backedup_streams_ = false;
   bool allow_metadata_ = false;
   bool stream_error_on_invalid_http_messaging_ = false;
   Stats::TestUtil::TestStore client_stats_store_;
@@ -468,7 +466,7 @@ class Http2CodecImplTest : public ::testing::TestWithParam<Http2SettingsTestPara
 public:
   Http2CodecImplTest()
       : Http2CodecImplTestFixture(::testing::get<0>(GetParam()), ::testing::get<1>(GetParam()),
-                                  ::testing::get<2>(GetParam()), ::testing::get<3>(GetParam())) {}
+                                  ::testing::get<2>(GetParam())) {}
 
 protected:
   void priorityFlood() {
@@ -555,6 +553,59 @@ protected:
 };
 
 TEST_P(Http2CodecImplTest, SimpleRequestResponse) {
+  initialize();
+
+  InSequence s;
+  TestRequestHeaderMapImpl request_headers;
+  HttpTestUtility::addDefaultHeaders(request_headers);
+  request_headers.setMethod("POST");
+
+  // Encode request headers.
+  EXPECT_CALL(request_decoder_, decodeHeaders_(_, false));
+  EXPECT_TRUE(request_encoder_->encodeHeaders(request_headers, false).ok());
+
+  // Queue request body.
+  Buffer::OwnedImpl request_body(std::string(1024, 'a'));
+  request_encoder_->encodeData(request_body, true);
+
+  // Flush request body.
+  EXPECT_CALL(request_decoder_, decodeData(_, true)).Times(AtLeast(1));
+  driveToCompletion();
+
+  TestResponseHeaderMapImpl response_headers{{":status", "200"}};
+
+  // Encode response headers.
+  EXPECT_CALL(response_decoder_, decodeHeaders_(_, false));
+  response_encoder_->encodeHeaders(response_headers, false);
+
+  // Queue response body.
+  Buffer::OwnedImpl response_body(std::string(1024, 'b'));
+  response_encoder_->encodeData(response_body, true);
+
+  // Flush response body.
+  EXPECT_CALL(response_decoder_, decodeData(_, true)).Times(AtLeast(1));
+  driveToCompletion();
+
+  EXPECT_TRUE(client_wrapper_->status_.ok());
+  EXPECT_TRUE(server_wrapper_->status_.ok());
+
+  if (http2_implementation_ == Http2Impl::Nghttp2) {
+    // Regression test for issue #19761.
+    EXPECT_EQ(0, getClientDataSourcesSize());
+    EXPECT_EQ(0, getServerDataSourcesSize());
+  }
+}
+
+TEST_P(Http2CodecImplTest, ClientUnexpectedHeaders) {
+  initialize();
+
+  Http::Status status = Http2CodecImplTestFixture::onConnBeginHeaders(client_.get(), 3);
+  EXPECT_FALSE(status.ok());
+  EXPECT_THAT(status.message(), testing::HasSubstr("stream 3 is already gone"));
+}
+
+TEST_P(Http2CodecImplTest, SimpleRequestResponseOldApi) {
+  scoped_runtime_.mergeValues({{"envoy.reloadable_features.http2_use_visitor_for_data", "false"}});
   initialize();
 
   InSequence s;
@@ -721,7 +772,7 @@ TEST_P(Http2CodecImplTest, MultipleContinueHeaders) {
   driveToCompletion();
 };
 
-// 104 headers etc. are passed to the response encoder (who is responsibly for deciding to
+// 105 headers etc. are passed to the response encoder (who is responsibly for deciding to
 // upgrade, ignore, etc.).
 TEST_P(Http2CodecImplTest, Unsupported1xxHeader) {
   initialize();
@@ -732,7 +783,7 @@ TEST_P(Http2CodecImplTest, Unsupported1xxHeader) {
   EXPECT_TRUE(request_encoder_->encodeHeaders(request_headers, true).ok());
   driveToCompletion();
 
-  TestResponseHeaderMapImpl other_headers{{":status", "104"}};
+  TestResponseHeaderMapImpl other_headers{{":status", "105"}};
   EXPECT_CALL(response_decoder_, decodeHeaders_(_, false));
   response_encoder_->encodeHeaders(other_headers, false);
   driveToCompletion();
@@ -1418,7 +1469,7 @@ TEST_P(Http2CodecImplTest, DumpsStreamlessConnectionWithoutAllocatingMemory) {
   std::array<char, 1024> buffer;
   OutputBufferStream ostream{buffer.data(), buffer.size()};
 
-  Stats::TestUtil::MemoryTest memory_test;
+  Memory::TestUtil::MemoryTest memory_test;
   server_->dumpState(ostream, 1);
 
   EXPECT_EQ(memory_test.consumedBytes(), 0);
@@ -1472,7 +1523,7 @@ TEST_P(Http2CodecImplTest, ShouldDumpActiveStreamsWithoutAllocatingMemory) {
     std::array<char, 2048> buffer;
     OutputBufferStream ostream{buffer.data(), buffer.size()};
     // Check no memory allocated.
-    Stats::TestUtil::MemoryTest memory_test;
+    Memory::TestUtil::MemoryTest memory_test;
     server_->dumpState(ostream, 1);
     EXPECT_EQ(memory_test.consumedBytes(), 0);
     // Check contents for active stream, local_end_stream_, trailers to encode and header map.
@@ -1498,7 +1549,7 @@ TEST_P(Http2CodecImplTest, ShouldDumpActiveStreamsWithoutAllocatingMemory) {
     std::array<char, 2048> buffer;
     OutputBufferStream ostream{buffer.data(), buffer.size()};
     // Check no memory allocated.
-    Stats::TestUtil::MemoryTest memory_test;
+    Memory::TestUtil::MemoryTest memory_test;
     client_->dumpState(ostream, 1);
     EXPECT_EQ(memory_test.consumedBytes(), 0);
 
@@ -1538,7 +1589,7 @@ TEST_P(Http2CodecImplTest, ShouldDumpCurrentSliceWithoutAllocatingMemory) {
   EXPECT_CALL(request_decoder_, decodeData(_, false)).WillOnce(Invoke([&](Buffer::Instance&, bool) {
     // dumpState here while we had a current slice of data. No Memory should be
     // allocated.
-    Stats::TestUtil::MemoryTest memory_test;
+    Memory::TestUtil::MemoryTest memory_test;
     server_->dumpState(ostream, 1);
     EXPECT_EQ(memory_test.consumedBytes(), 0);
   }));
@@ -1583,7 +1634,7 @@ TEST_P(Http2CodecImplTest, ClientConnectionShouldDumpCorrespondingRequestWithout
     // dumpState here while decodingHeaders in the client. This means we're
     // working on a particular stream, whose corresponding request, we'll dump.
     // No Memory should be allocated.
-    Stats::TestUtil::MemoryTest memory_test;
+    Memory::TestUtil::MemoryTest memory_test;
     client_->dumpState(ostream, 1);
     EXPECT_EQ(memory_test.consumedBytes(), 0);
   }));
@@ -1607,10 +1658,6 @@ TEST_P(Http2CodecImplTest, ShouldRestoreCrashDumpInfoWhenHandlingDeferredProcess
   // members in dtor.
   initialize();
 
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
   std::array<char, 2048> buffer;
   OutputBufferStream ostream{buffer.data(), buffer.size()};
 
@@ -1912,10 +1959,8 @@ TEST_P(Http2CodecImplFlowControlTest, TestFlowControlInPendingSendData) {
   // For bonus corner case coverage, remove callback2 in the middle of runLowWatermarkCallbacks()
   // and ensure it is not called.
   NiceMock<Event::MockSchedulableCallback>* process_buffered_data_callback{nullptr};
-  if (defer_processing_backedup_streams_) {
-    process_buffered_data_callback =
-        new NiceMock<Event::MockSchedulableCallback>(&server_connection_.dispatcher_);
-  }
+  process_buffered_data_callback =
+      new NiceMock<Event::MockSchedulableCallback>(&server_connection_.dispatcher_);
 
   EXPECT_CALL(callbacks, onBelowWriteBufferLowWatermark()).WillOnce(Invoke([&]() -> void {
     request_encoder_->getStream().removeCallbacks(callbacks2);
@@ -1923,25 +1968,21 @@ TEST_P(Http2CodecImplFlowControlTest, TestFlowControlInPendingSendData) {
   EXPECT_CALL(callbacks2, onBelowWriteBufferLowWatermark()).Times(0);
   EXPECT_CALL(callbacks3, onBelowWriteBufferLowWatermark());
 
-  if (defer_processing_backedup_streams_) {
-    // NOLINTNEXTLINE(clang-analyzer-core.NullDereference)
-    EXPECT_FALSE(process_buffered_data_callback->enabled_);
-  }
+  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference)
+  EXPECT_FALSE(process_buffered_data_callback->enabled_);
 
   server_->getStream(1)->readDisable(false);
   driveToCompletion();
 
-  if (defer_processing_backedup_streams_) {
-    // Drain queued data for us to process, we should have over a window worth
-    // of data.
-    ASSERT(process_buffered_data_callback != nullptr);
-    EXPECT_TRUE(process_buffered_data_callback->enabled());
-    while (process_buffered_data_callback->enabled()) {
-      process_buffered_data_callback->invokeCallback();
-    }
-    // Allow client to send last bit of data that was pending.
-    driveToCompletion();
+  // Drain queued data for us to process, we should have over a window worth
+  // of data.
+  ASSERT(process_buffered_data_callback != nullptr);
+  EXPECT_TRUE(process_buffered_data_callback->enabled());
+  while (process_buffered_data_callback->enabled()) {
+    process_buffered_data_callback->invokeCallback();
   }
+  // Allow client to send last bit of data that was pending.
+  driveToCompletion();
 
   EXPECT_EQ(0, client_->getStream(1)->pending_send_data_->length());
   EXPECT_EQ(0, TestUtility::findGauge(client_stats_store_, "http2.pending_send_bytes")->value());
@@ -2050,25 +2091,16 @@ TEST_P(Http2CodecImplFlowControlTest, FlowControlInPendingRecvData) {
   server_->getStream(1)->readDisable(true);
   Buffer::OwnedImpl data2(std::string(65495, 'a'));
 
-  if (defer_processing_backedup_streams_) {
-    // Writes will be deferred.
-    request_encoder_->encodeData(data2, false);
-    driveToCompletion();
-  } else {
-    // Writes will be pushed through.
-    EXPECT_CALL(request_decoder_, decodeData(_, false)).Times(AnyNumber());
-    request_encoder_->encodeData(data2, false);
-    driveToCompletion();
-  }
+  // Writes will be deferred.
+  request_encoder_->encodeData(data2, false);
+  driveToCompletion();
 
   // When read disabled we should not send window updates on receiving data.
   EXPECT_EQ(getStreamReceiveWindowSize(server_, 1), 0);
 
   NiceMock<Event::MockSchedulableCallback>* process_buffered_data_callback{nullptr};
-  if (defer_processing_backedup_streams_) {
-    process_buffered_data_callback =
-        new NiceMock<Event::MockSchedulableCallback>(&server_connection_.dispatcher_);
-  }
+  process_buffered_data_callback =
+      new NiceMock<Event::MockSchedulableCallback>(&server_connection_.dispatcher_);
 
   // We should send window update when read enabled and not over
   // pending recv buffer high watermark.
@@ -2088,11 +2120,6 @@ TEST_P(Http2CodecImplFlowControlTest, FlowControlInPendingRecvData) {
 // output buffer.
 TEST_P(Http2CodecImplFlowControlTest, PendingRecvBufferBoundedWhenDeferProcessing) {
   initialize();
-
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
 
   TestRequestHeaderMapImpl request_headers;
   HttpTestUtility::addDefaultHeaders(request_headers);
@@ -2360,12 +2387,10 @@ TEST_P(Http2CodecImplFlowControlTest, WindowUpdateOnReadResumingFlood) {
   EXPECT_FALSE(violation_callback->enabled_);
 
   NiceMock<Event::MockSchedulableCallback>* process_buffered_data_callback{nullptr};
-  if (defer_processing_backedup_streams_) {
-    process_buffered_data_callback =
-        new NiceMock<Event::MockSchedulableCallback>(&server_connection_.dispatcher_);
+  process_buffered_data_callback =
+      new NiceMock<Event::MockSchedulableCallback>(&server_connection_.dispatcher_);
 
-    EXPECT_FALSE(process_buffered_data_callback->enabled_);
-  }
+  EXPECT_FALSE(process_buffered_data_callback->enabled_);
 
   // Now unblock the server's stream. This will cause the bytes to be consumed, 2 flow control
   // updates to be sent, and overflow outbound frame queue.
@@ -2373,9 +2398,7 @@ TEST_P(Http2CodecImplFlowControlTest, WindowUpdateOnReadResumingFlood) {
   driveToCompletion();
 
   EXPECT_TRUE(violation_callback->enabled_);
-  if (defer_processing_backedup_streams_) {
-    EXPECT_TRUE(process_buffered_data_callback->enabled_);
-  }
+  EXPECT_TRUE(process_buffered_data_callback->enabled_);
   EXPECT_CALL(server_connection_, close(Envoy::Network::ConnectionCloseType::NoFlush, _));
   violation_callback->invokeCallback();
 
@@ -2561,15 +2584,13 @@ TEST_P(Http2CodecImplStreamLimitTest, LazyDecreaseMaxConcurrentStreamsConsumeErr
 INSTANTIATE_TEST_SUITE_P(
     Http2CodecImplDeferredResetTest, Http2CodecImplDeferredResetTest,
     ::testing::Combine(HTTP2SETTINGS_SMALL_WINDOW_COMBINE, HTTP2SETTINGS_SMALL_WINDOW_COMBINE,
-                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2),
-                       ::testing::Bool()));
+                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2)));
 
 // Flow control tests only use only small windows so that we can test certain conditions.
 INSTANTIATE_TEST_SUITE_P(
     Http2CodecImplFlowControlTest, Http2CodecImplFlowControlTest,
     ::testing::Combine(HTTP2SETTINGS_SMALL_WINDOW_COMBINE, HTTP2SETTINGS_SMALL_WINDOW_COMBINE,
-                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2),
-                       ::testing::Bool()));
+                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2)));
 
 // we separate default/edge cases here to avoid combinatorial explosion
 #define HTTP2SETTINGS_DEFAULT_COMBINE                                                              \
@@ -2584,14 +2605,12 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     Http2CodecImplStreamLimitTest, Http2CodecImplStreamLimitTest,
     ::testing::Combine(HTTP2SETTINGS_DEFAULT_COMBINE, HTTP2SETTINGS_DEFAULT_COMBINE,
-                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2),
-                       ::testing::Bool()));
+                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2)));
 
 INSTANTIATE_TEST_SUITE_P(
     Http2CodecImplTestDefaultSettings, Http2CodecImplTest,
     ::testing::Combine(HTTP2SETTINGS_DEFAULT_COMBINE, HTTP2SETTINGS_DEFAULT_COMBINE,
-                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2),
-                       ::testing::Bool()));
+                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2)));
 
 #define HTTP2SETTINGS_EDGE_COMBINE                                                                 \
   ::testing::Combine(                                                                              \
@@ -2612,13 +2631,11 @@ using Http2CodecImplTestAll = Http2CodecImplTest;
 INSTANTIATE_TEST_SUITE_P(
     Http2CodecImplTestDefaultSettings, Http2CodecImplTestAll,
     ::testing::Combine(HTTP2SETTINGS_DEFAULT_COMBINE, HTTP2SETTINGS_DEFAULT_COMBINE,
-                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2),
-                       ::testing::Bool()));
+                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2)));
 INSTANTIATE_TEST_SUITE_P(Http2CodecImplTestEdgeSettings, Http2CodecImplTestAll,
                          ::testing::Combine(HTTP2SETTINGS_EDGE_COMBINE, HTTP2SETTINGS_EDGE_COMBINE,
                                             ::testing::Values(Http2Impl::Nghttp2,
-                                                              Http2Impl::Oghttp2),
-                                            ::testing::Bool()));
+                                                              Http2Impl::Oghttp2)));
 
 TEST(Http2CodecUtility, reconstituteCrumbledCookies) {
   {
@@ -2672,9 +2689,8 @@ public:
 
   Http2CustomSettingsTestBase(Http2SettingsTuple client_settings,
                               Http2SettingsTuple server_settings, Http2Impl http2_implementation,
-                              bool defer_processing_backedup_streams, bool validate_client)
-      : Http2CodecImplTestFixture(client_settings, server_settings, http2_implementation,
-                                  defer_processing_backedup_streams),
+                              bool validate_client)
+      : Http2CodecImplTestFixture(client_settings, server_settings, http2_implementation),
         validate_client_(validate_client) {}
 
   ~Http2CustomSettingsTestBase() override = default;
@@ -2718,17 +2734,16 @@ protected:
 class Http2CustomSettingsTest
     : public Http2CustomSettingsTestBase,
       public ::testing::TestWithParam<
-          ::testing::tuple<Http2SettingsTuple, Http2SettingsTuple, Http2Impl, bool, bool>> {
+          ::testing::tuple<Http2SettingsTuple, Http2SettingsTuple, Http2Impl, bool>> {
 public:
   Http2CustomSettingsTest()
       : Http2CustomSettingsTestBase(::testing::get<0>(GetParam()), ::testing::get<1>(GetParam()),
-                                    ::testing::get<2>(GetParam()), ::testing::get<3>(GetParam()),
-                                    ::testing::get<4>(GetParam())) {}
+                                    ::testing::get<2>(GetParam()), ::testing::get<3>(GetParam())) {}
 };
 INSTANTIATE_TEST_SUITE_P(
     Http2CodecImplTestEdgeSettings, Http2CustomSettingsTest,
     ::testing::Combine(HTTP2SETTINGS_DEFAULT_COMBINE, HTTP2SETTINGS_DEFAULT_COMBINE,
-                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2), ::testing::Bool(),
+                       ::testing::Values(Http2Impl::Nghttp2, Http2Impl::Oghttp2),
                        ::testing::Bool()));
 
 // Validates that custom parameters (those which are not explicitly named in the
@@ -3478,6 +3493,25 @@ TEST_P(Http2CodecImplTest, WindowUpdateFloodOverride) {
   EXPECT_NO_THROW(driveToCompletion());
 }
 
+TEST_P(Http2CodecImplTest, DataFrameWithPadding) {
+  initialize();
+  TestRequestHeaderMapImpl request_headers;
+  HttpTestUtility::addDefaultHeaders(request_headers);
+  request_headers.setMethod("POST");
+  EXPECT_CALL(request_decoder_, decodeHeaders_(_, false));
+  EXPECT_TRUE(request_encoder_->encodeHeaders(request_headers, false).ok());
+  driveToCompletion();
+  Http2Frame dataFrame = Http2Frame::makeDataFrameWithPadding(Http2Frame::makeClientStreamId(0),
+                                                              "some data with padding", 193);
+  Buffer::OwnedImpl data;
+  data.add(dataFrame.data(), dataFrame.size());
+  server_wrapper_->buffer_.add(std::move(data));
+  EXPECT_CALL(request_decoder_, decodeData(_, false));
+  driveToCompletion();
+  const Http::Status& status = server_wrapper_->status_;
+  EXPECT_TRUE(status.ok());
+}
+
 TEST_P(Http2CodecImplTest, EmptyDataFlood) {
   expect_buffered_data_on_teardown_ = true;
   Buffer::OwnedImpl data;
@@ -3724,11 +3758,6 @@ TEST_P(Http2CodecImplTest, ShouldWaitForDeferredBodyToProcessBeforeProcessingTra
   // members in dtor.
   initialize();
 
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
-
   TestRequestHeaderMapImpl request_headers;
   HttpTestUtility::addDefaultHeaders(request_headers);
   EXPECT_CALL(request_decoder_, decodeHeaders_(_, false));
@@ -3785,11 +3814,6 @@ TEST_P(Http2CodecImplTest, ShouldBufferDeferredBodyNoEndstream) {
   // members in dtor.
   initialize();
 
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
-
   TestRequestHeaderMapImpl request_headers;
   HttpTestUtility::addDefaultHeaders(request_headers);
   EXPECT_CALL(request_decoder_, decodeHeaders_(_, false));
@@ -3824,11 +3848,6 @@ TEST_P(Http2CodecImplTest, ShouldBufferDeferredBodyWithEndStream) {
   // We must initialize before dtor, otherwise we'll touch uninitialized
   // members in dtor.
   initialize();
-
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
 
   TestRequestHeaderMapImpl request_headers;
   HttpTestUtility::addDefaultHeaders(request_headers);
@@ -3869,11 +3888,6 @@ TEST_P(Http2CodecImplTest,
   // members in dtor.
   initialize();
 
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
-
   TestRequestHeaderMapImpl request_headers;
   HttpTestUtility::addDefaultHeaders(request_headers);
   EXPECT_CALL(request_decoder_, decodeHeaders_(_, false));
@@ -3911,11 +3925,6 @@ TEST_P(Http2CodecImplTest, CanHandleMultipleBufferedDataProcessingOnAStream) {
   // members in dtor.
   initialize();
 
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
-
   TestRequestHeaderMapImpl request_headers;
   HttpTestUtility::addDefaultHeaders(request_headers);
   EXPECT_CALL(request_decoder_, decodeHeaders_(_, false));
@@ -3951,11 +3960,6 @@ TEST_P(Http2CodecImplTest,
   // We must initialize before dtor, otherwise we'll touch uninitialized
   // members in dtor.
   initialize();
-
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
 
   TestRequestHeaderMapImpl request_headers;
   HttpTestUtility::addDefaultHeaders(request_headers);
@@ -4029,11 +4033,6 @@ TEST_P(Http2CodecImplTest, ShouldTrackWhichStreamLeastRecentlyEncodedIfDeferProc
   // members in dtor.
   initialize();
 
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
-
   // Check headers
   RequestEncoder* request_encoder1 = request_encoder_;
   TestRequestHeaderMapImpl request_headers;
@@ -4105,11 +4104,6 @@ TEST_P(Http2CodecImplTest, ChunksLargeBodyDuringDeferredProcessing) {
   // members in dtor.
   initialize();
 
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
-
   // Start request
   TestRequestHeaderMapImpl request_headers;
   HttpTestUtility::addDefaultHeaders(request_headers);
@@ -4175,11 +4169,6 @@ TEST_P(Http2CodecImplTest, ChunkingCanOccurFromFdEvent) {
   // members in dtor.
   initialize();
 
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
-
   // Start request
   TestRequestHeaderMapImpl request_headers;
   HttpTestUtility::addDefaultHeaders(request_headers);
@@ -4241,11 +4230,6 @@ TEST_P(Http2CodecImplTest, ChunkProcessingShouldNotScheduleIfReadDisabled) {
   // We must initialize before dtor, otherwise we'll touch uninitialized
   // members in dtor.
   initialize();
-
-  // Test only makes sense if we have defer processing enabled.
-  if (!defer_processing_backedup_streams_) {
-    return;
-  }
 
   // Start request
   TestRequestHeaderMapImpl request_headers;
@@ -4561,8 +4545,6 @@ TEST_P(Http2CodecImplTest, BadResponseHeader) {
   EXPECT_TRUE(server_wrapper_->status_.ok());
 }
 
-class TestNghttp2SessionFactory;
-
 // Test client for H/2 METADATA frame edge cases.
 class MetadataTestClientConnectionImpl : public TestClientConnectionImpl {
 public:
@@ -4587,68 +4569,7 @@ public:
   }
 
 protected:
-  friend class TestNghttp2SessionFactory;
-
   NewMetadataEncoder encoder_;
-};
-
-class TestNghttp2SessionFactory : public Http2SessionFactory {
-public:
-  ~TestNghttp2SessionFactory() override {
-    nghttp2_session_callbacks_del(callbacks_);
-    nghttp2_option_del(options_);
-  }
-
-  std::unique_ptr<http2::adapter::Http2Adapter>
-  create(const nghttp2_session_callbacks*, ConnectionImpl* connection,
-         const http2::adapter::OgHttp2Adapter::Options& options) override {
-    // Only need to provide callbacks required to send METADATA frames. The new codec wrapper
-    // requires the send callback, but not the pack_extension callback.
-    nghttp2_session_callbacks_new(&callbacks_);
-    nghttp2_session_callbacks_set_send_callback(
-        callbacks_,
-        [](nghttp2_session*, const uint8_t* data, size_t length, int, void* user_data) -> ssize_t {
-          // Cast down to MetadataTestClientConnectionImpl to leverage friendship.
-          return static_cast<MetadataTestClientConnectionImpl*>(
-                     static_cast<ConnectionImpl*>(user_data))
-              ->onSend(data, length);
-        });
-    auto visitor = std::make_unique<http2::adapter::CallbackVisitor>(
-        http2::adapter::Perspective::kClient, *callbacks_, connection);
-    http2::adapter::Http2VisitorInterface& v = *visitor;
-    connection->setVisitor(std::move(visitor));
-    return http2::adapter::OgHttp2Adapter::Create(v, options);
-  }
-
-  std::unique_ptr<http2::adapter::Http2Adapter> create(const nghttp2_session_callbacks*,
-                                                       ConnectionImpl* connection,
-                                                       const nghttp2_option*) override {
-    // Only need to provide callbacks required to send METADATA frames. The new codec wrapper
-    // requires the send callback, but not the pack_extension callback.
-    nghttp2_session_callbacks_new(&callbacks_);
-    nghttp2_session_callbacks_set_send_callback(
-        callbacks_,
-        [](nghttp2_session*, const uint8_t* data, size_t length, int, void* user_data) -> ssize_t {
-          // Cast down to MetadataTestClientConnectionImpl to leverage friendship.
-          return static_cast<MetadataTestClientConnectionImpl*>(
-                     static_cast<ConnectionImpl*>(user_data))
-              ->onSend(data, length);
-        });
-    nghttp2_option_new(&options_);
-    nghttp2_option_set_user_recv_extension_type(options_, METADATA_FRAME_TYPE);
-
-    auto visitor = std::make_unique<http2::adapter::CallbackVisitor>(
-        http2::adapter::Perspective::kClient, *callbacks_, connection);
-    http2::adapter::Http2VisitorInterface& v = *visitor;
-    connection->setVisitor(std::move(visitor));
-    return http2::adapter::NgHttp2Adapter::CreateClientAdapter(v, options_);
-  }
-
-  void init(ConnectionImpl*, const envoy::config::core::v3::Http2ProtocolOptions&) override {}
-
-private:
-  nghttp2_session_callbacks* callbacks_;
-  nghttp2_option* options_;
 };
 
 class Http2CodecMetadataTest : public Http2CodecImplTestFixture, public ::testing::Test {
@@ -4658,8 +4579,6 @@ public:
 protected:
   void initialize() override {
     setupHttp2Overrides();
-    scoped_runtime_.mergeValues({{std::string(Runtime::defer_processing_backedup_streams),
-                                  defer_processing_backedup_streams_ ? "true" : "false"}});
     allow_metadata_ = true;
     http2OptionsFromTuple(client_http2_options_, client_settings_);
     http2OptionsFromTuple(server_http2_options_, server_settings_);
@@ -4680,7 +4599,7 @@ protected:
   }
 
 private:
-  TestNghttp2SessionFactory http2_session_factory_;
+  ProdNghttp2SessionFactory http2_session_factory_;
 };
 
 // Validates noop handling of METADATA frames without a known stream ID.

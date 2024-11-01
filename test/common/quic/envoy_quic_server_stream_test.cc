@@ -50,8 +50,10 @@ public:
         quic_connection_(connection_helper_, alarm_factory_, writer_,
                          quic::ParsedQuicVersionVector{quic_version_}, *listener_config_.socket_,
                          connection_id_generator_),
+        quic_stat_names_(listener_config_.listenerScope().symbolTable()),
         quic_session_(quic_config_, {quic_version_}, &quic_connection_, *dispatcher_,
-                      quic_config_.GetInitialStreamFlowControlWindowToSend() * 2),
+                      quic_config_.GetInitialStreamFlowControlWindowToSend() * 2, quic_stat_names_,
+                      listener_config_.listenerScope()),
         stats_(
             {ALL_HTTP3_CODEC_STATS(POOL_COUNTER_PREFIX(listener_config_.listenerScope(), "http3."),
                                    POOL_GAUGE_PREFIX(listener_config_.listenerScope(), "http3."))}),
@@ -126,7 +128,7 @@ public:
           EXPECT_FALSE(capsule_protocol.empty());
           EXPECT_EQ(capsule_protocol[0]->value().getStringView(), "?1");
         }));
-    spdy::Http2HeaderBlock request_headers;
+    quiche::HttpHeaderBlock request_headers;
     request_headers[":authority"] = host_;
     request_headers[":method"] = "CONNECT";
     request_headers[":protocol"] = "connect-udp";
@@ -222,6 +224,7 @@ protected:
   quic::DeterministicConnectionIdGenerator connection_id_generator_{
       quic::kQuicDefaultConnectionIdLength};
   testing::NiceMock<MockEnvoyQuicServerConnection> quic_connection_;
+  Envoy::Quic::QuicStatNames quic_stat_names_;
   MockEnvoyQuicSession quic_session_;
   quic::QuicStreamId stream_id_{kStreamId};
   Http::Http3::CodecStats stats_;
@@ -229,10 +232,10 @@ protected:
   EnvoyQuicServerStream* quic_stream_;
   Http::MockRequestDecoder stream_decoder_;
   Http::MockStreamCallbacks stream_callbacks_;
-  spdy::Http2HeaderBlock spdy_request_headers_;
+  quiche::HttpHeaderBlock spdy_request_headers_;
   Http::TestResponseHeaderMapImpl response_headers_;
   Http::TestResponseTrailerMapImpl response_trailers_;
-  spdy::Http2HeaderBlock spdy_trailers_;
+  quiche::HttpHeaderBlock spdy_trailers_;
   std::string host_{"www.abc.com"};
   std::string request_body_{"Hello world"};
 #ifdef ENVOY_ENABLE_HTTP_DATAGRAMS
@@ -260,7 +263,7 @@ TEST_F(EnvoyQuicServerStreamTest, GetRequestAndResponse) {
                   headers->get(Http::Headers::get().Cookie)[0]->value().getStringView());
       }));
   EXPECT_CALL(stream_decoder_, decodeData(BufferStringEqual(""), /*end_stream=*/true));
-  spdy::Http2HeaderBlock spdy_headers;
+  quiche::HttpHeaderBlock spdy_headers;
   spdy_headers[":authority"] = host_;
   spdy_headers[":method"] = "GET";
   spdy_headers[":path"] = "/";
@@ -275,6 +278,17 @@ TEST_F(EnvoyQuicServerStreamTest, GetRequestAndResponse) {
 }
 
 TEST_F(EnvoyQuicServerStreamTest, PostRequestAndResponse) {
+  EXPECT_EQ(absl::nullopt, quic_stream_->http1StreamEncoderOptions());
+  receiveRequest(request_body_, true, request_body_.size() * 2);
+  quic_stream_->encodeHeaders(response_headers_, /*end_stream=*/false);
+
+  std::string response(18 * 1024, 'a');
+  Buffer::OwnedImpl buffer(response);
+  quic_stream_->encodeData(buffer, false);
+  quic_stream_->encodeTrailers(response_trailers_);
+}
+
+TEST_F(EnvoyQuicServerStreamTest, PostRequestAndResponseWithMemSliceReleasor) {
   EXPECT_EQ(absl::nullopt, quic_stream_->http1StreamEncoderOptions());
   receiveRequest(request_body_, true, request_body_.size() * 2);
   quic_stream_->encodeHeaders(response_headers_, /*end_stream=*/false);
@@ -696,7 +710,7 @@ TEST_F(EnvoyQuicServerStreamTest, RequestHeaderTooLarge) {
   EXPECT_CALL(quic_session_, MaybeSendStopSendingFrame(_, _));
   EXPECT_CALL(quic_session_, MaybeSendRstStreamFrame(_, _, _));
   EXPECT_CALL(stream_callbacks_, onResetStream(Http::StreamResetReason::LocalReset, _));
-  spdy::Http2HeaderBlock spdy_headers;
+  quiche::HttpHeaderBlock spdy_headers;
   spdy_headers[":authority"] = host_;
   spdy_headers[":method"] = "POST";
   spdy_headers[":path"] = "/";
@@ -720,7 +734,7 @@ TEST_F(EnvoyQuicServerStreamTest, RequestTrailerTooLarge) {
   EXPECT_CALL(quic_session_, MaybeSendStopSendingFrame(_, _));
   EXPECT_CALL(quic_session_, MaybeSendRstStreamFrame(_, _, _));
   EXPECT_CALL(stream_callbacks_, onResetStream(Http::StreamResetReason::LocalReset, _));
-  spdy::Http2HeaderBlock spdy_trailers;
+  quiche::HttpHeaderBlock spdy_trailers;
   // This header exceeds max header size limit and should cause stream reset.
   spdy_trailers["long_header"] = std::string(16 * 1024 + 1, 'a');
   std::string payload = spdyHeaderToHttp3StreamPayload(spdy_trailers);
@@ -833,7 +847,8 @@ TEST_F(EnvoyQuicServerStreamTest, StatsGathererLogsOnStreamDestruction) {
   std::list<AccessLog::InstanceSharedPtr> loggers = {mock_logger};
   Event::GlobalTimeSystem test_time_;
   Envoy::StreamInfo::StreamInfoImpl stream_info{Http::Protocol::Http2, test_time_.timeSystem(),
-                                                nullptr};
+                                                nullptr,
+                                                StreamInfo::FilterState::LifeSpan::FilterChain};
   quic_stream_->statsGatherer()->setAccessLogHandlers(loggers);
   quic_stream_->setDeferredLoggingHeadersAndTrailers(nullptr, nullptr, nullptr, stream_info);
 
@@ -845,7 +860,7 @@ TEST_F(EnvoyQuicServerStreamTest, StatsGathererLogsOnStreamDestruction) {
   EXPECT_GT(quic_stream_->statsGatherer()->bytesOutstanding(), 0);
   // Close the stream; incoming acks will no longer invoke the stats gatherer but
   // the stats gatherer should log on stream close despite not receiving final downstream ack.
-  EXPECT_CALL(*mock_logger, log(_, _, _, _, _));
+  EXPECT_CALL(*mock_logger, log(_, _));
   quic_stream_->resetStream(Http::StreamResetReason::LocalRefusedStreamReset);
 }
 
@@ -881,7 +896,7 @@ TEST_F(EnvoyQuicServerStreamTest, DecodeHttp3Datagram) {
 #endif
 
 TEST_F(EnvoyQuicServerStreamTest, RegularHeaderBeforePseudoHeader) {
-  spdy::Http2HeaderBlock spdy_headers;
+  quiche::HttpHeaderBlock spdy_headers;
   spdy_headers["foo"] = "bar";
   spdy_headers[":authority"] = host_;
   spdy_headers[":method"] = "GET";
@@ -897,7 +912,6 @@ TEST_F(EnvoyQuicServerStreamTest, RegularHeaderBeforePseudoHeader) {
 
 TEST_F(EnvoyQuicServerStreamTest, DuplicatedPathHeader) {
   quic::QuicHeaderList header_list;
-  header_list.OnHeaderBlockStart();
   header_list.OnHeader(":authority", "www.google.com:4433");
   header_list.OnHeader(":method", "GET");
   header_list.OnHeader(":scheme", "https");

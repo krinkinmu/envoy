@@ -2,6 +2,7 @@
 
 #include "source/common/buffer/buffer_impl.h"
 #include "source/common/network/address_impl.h"
+#include "source/common/network/socket_option_factory.h"
 #include "source/common/network/utility.h"
 #include "source/common/router/config_impl.h"
 #include "source/common/router/router.h"
@@ -16,6 +17,7 @@
 #include "test/mocks/router/router_filter_interface.h"
 #include "test/mocks/server/factory_context.h"
 #include "test/mocks/server/instance.h"
+#include "test/test_common/threadsafe_singleton_injector.h"
 #include "test/test_common/utility.h"
 
 #include "gmock/gmock.h"
@@ -44,6 +46,7 @@ public:
     udp_upstream_ =
         std::make_unique<UdpUpstream>(&mock_upstream_to_downstream_, std::move(mock_socket),
                                       std::move(mock_host), mock_dispatcher_);
+    EXPECT_NO_THROW(udp_upstream_->enableTcpTunneling());
   }
 
 protected:
@@ -80,10 +83,9 @@ TEST_F(UdpUpstreamTest, ExchangeCapsules) {
                              "a1a2a3a4a5a6a7" // UDP Proxying Payload
       );
   Buffer::OwnedImpl sent_capsule(sent_capsule_fragment);
-  EXPECT_CALL(*mock_socket_->io_handle_, sendmsg(_, _, _, _, _))
-      .WillOnce([](const Buffer::RawSlice* slices, uint64_t num_slice, int /*flags*/,
-                   const Network::Address::Ip* /*self_ip*/,
-                   const Network::Address::Instance& /*peer_address*/) {
+  EXPECT_CALL(*mock_socket_->io_handle_, wasConnected()).WillOnce(Return(true));
+  EXPECT_CALL(*mock_socket_->io_handle_, writev(_, _))
+      .WillOnce([](const Buffer::RawSlice* slices, uint64_t num_slice) {
         Buffer::OwnedImpl buffer(absl::HexStringToBytes("a1a2a3a4a5a6a7"));
         EXPECT_TRUE(TestUtility::rawSlicesEqual(buffer.getRawSlices().data(), slices, num_slice));
         return Api::ioCallUint64ResultNoError();
@@ -102,7 +104,8 @@ TEST_F(UdpUpstreamTest, ExchangeCapsules) {
   EXPECT_CALL(mock_upstream_to_downstream_,
               decodeData(BufferStringEqual(decoded_capsule_fragment), false));
   Envoy::MonotonicTime timestamp;
-  udp_upstream_->processPacket(nullptr, nullptr, std::move(received_data), timestamp);
+  udp_upstream_->processPacket(nullptr, nullptr, std::move(received_data), timestamp, /*tos=*/0,
+                               /*saved_cmsg=*/{});
 }
 
 TEST_F(UdpUpstreamTest, HeaderOnlyRequest) {
@@ -183,6 +186,68 @@ TEST_F(UdpUpstreamTest, SocketConnectError) {
   EXPECT_CALL(mock_upstream_to_downstream_, decodeHeaders).Times(0);
   EXPECT_CALL(*mock_socket_, connect(_)).WillOnce(Return(Api::SysCallIntResult{-1, EADDRINUSE}));
   EXPECT_FALSE(udp_upstream_->encodeHeaders(connect_udp_headers_, false).ok());
+}
+
+class UdpConnPoolTest : public ::testing::Test {
+public:
+  UdpConnPoolTest() {
+    ON_CALL(*mock_thread_local_cluster_.lb_.host_, address)
+        .WillByDefault(
+            Return(Network::Utility::parseInternetAddressAndPortNoThrow("127.0.0.1:80", false)));
+    udp_conn_pool_ = std::make_unique<UdpConnPool>(mock_thread_local_cluster_, nullptr);
+    EXPECT_CALL(*mock_thread_local_cluster_.lb_.host_, address).Times(2);
+    EXPECT_CALL(*mock_thread_local_cluster_.lb_.host_, cluster);
+    mock_thread_local_cluster_.lb_.host_->cluster_.source_address_ =
+        Network::Utility::parseInternetAddressAndPortNoThrow("127.0.0.1:10001", false);
+  }
+
+protected:
+  NiceMock<Envoy::Upstream::MockThreadLocalCluster> mock_thread_local_cluster_;
+  std::unique_ptr<UdpConnPool> udp_conn_pool_;
+  Router::MockGenericConnectionPoolCallbacks mock_callback_;
+};
+
+TEST_F(UdpConnPoolTest, BindToUpstreamLocalAddress) {
+  EXPECT_CALL(mock_callback_, upstreamToDownstream);
+  NiceMock<Network::MockConnection> downstream_connection_;
+  EXPECT_CALL(mock_callback_.upstream_to_downstream_, connection)
+      .WillRepeatedly(
+          Return(Envoy::OptRef<const Envoy::Network::Connection>(downstream_connection_)));
+  EXPECT_CALL(mock_callback_, onPoolReady);
+  // Mock syscall to make the bind call succeed.
+  NiceMock<Envoy::Api::MockOsSysCalls> mock_os_sys_calls;
+  Envoy::TestThreadsafeSingletonInjector<Envoy::Api::OsSysCallsImpl> os_sys_calls(
+      &mock_os_sys_calls);
+  EXPECT_CALL(mock_os_sys_calls, bind).WillOnce(Return(Api::SysCallIntResult{0, 0}));
+  udp_conn_pool_->newStream(&mock_callback_);
+}
+
+TEST_F(UdpConnPoolTest, ApplySocketOptionsFailure) {
+  Upstream::UpstreamLocalAddress upstream_local_address = {
+      mock_thread_local_cluster_.lb_.host_->cluster_.source_address_,
+      Network::SocketOptionFactory::buildIpFreebindOptions()};
+  // Return a socket option to make the setsockopt syscall is called.
+  EXPECT_CALL(*mock_thread_local_cluster_.lb_.host_->cluster_.upstream_local_address_selector_,
+              getUpstreamLocalAddressImpl)
+      .WillOnce(Return(upstream_local_address));
+  EXPECT_CALL(mock_callback_, onPoolFailure);
+  // Mock syscall to make the setsockopt call fail.
+  NiceMock<Envoy::Api::MockOsSysCalls> mock_os_sys_calls;
+  Envoy::TestThreadsafeSingletonInjector<Envoy::Api::OsSysCallsImpl> os_sys_calls(
+      &mock_os_sys_calls);
+  // Use ON_CALL since the applyOptions call fail without calling the setsockopt_ in Windows.
+  ON_CALL(mock_os_sys_calls, setsockopt_).WillByDefault(Return(-1));
+  udp_conn_pool_->newStream(&mock_callback_);
+}
+
+TEST_F(UdpConnPoolTest, BindFailure) {
+  EXPECT_CALL(mock_callback_, onPoolFailure);
+  // Mock syscall to make the bind call fail.
+  NiceMock<Envoy::Api::MockOsSysCalls> mock_os_sys_calls;
+  Envoy::TestThreadsafeSingletonInjector<Envoy::Api::OsSysCallsImpl> os_sys_calls(
+      &mock_os_sys_calls);
+  EXPECT_CALL(mock_os_sys_calls, bind).WillOnce(Return(Api::SysCallIntResult{-1, 0}));
+  udp_conn_pool_->newStream(&mock_callback_);
 }
 
 } // namespace Udp

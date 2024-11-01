@@ -157,7 +157,9 @@ The following command operators are supported:
 
   .. code-block:: none
 
-    %START_TIME(%Y/%m/%dT%H:%M:%S%z %s)%
+    %START_TIME(%Y/%m/%dT%H:%M:%S%z)%
+
+    %START_TIME(%s)%
 
     # To include millisecond fraction of the second (.000 ... .999). E.g. 1527590590.528.
     %START_TIME(%s.%3f)%
@@ -167,6 +169,24 @@ The following command operators are supported:
     %START_TIME(%s.%9f)%
 
   In typed JSON logs, START_TIME is always rendered as a string.
+
+.. _config_access_log_format_start_time_local:
+
+%START_TIME_LOCAL%
+  Same as :ref:`START_TIME <config_access_log_format_start_time>`, but use local time zone.
+
+.. _config_access_log_format_emit_time:
+
+%EMIT_TIME%
+  The time when log entry is emitted including milliseconds.
+
+  EMIT_TIME can be customized using a `format string <https://en.cppreference.com/w/cpp/io/manip/put_time>`_.
+  See :ref:`START_TIME <config_access_log_format_start_time>` for additional format specifiers and examples.
+
+.. _config_access_log_format_emit_time_local:
+
+%EMIT_TIME_LOCAL%
+  Same as :ref:`EMIT_TIME <config_access_log_format_emit_time>`, but use local time zone.
 
 %REQUEST_HEADERS_BYTES%
   HTTP
@@ -183,7 +203,7 @@ The following command operators are supported:
     Downstream bytes received on connection.
 
   UDP
-    Not implemented (0).
+    Bytes received from the downstream in the UDP session.
 
   Renders a numeric value in typed JSON logs.
 
@@ -284,7 +304,7 @@ The following command operators are supported:
     Downstream bytes sent on connection.
 
   UDP
-    Not implemented (0).
+    Bytes sent to the downstream in the UDP session.
 
 %UPSTREAM_REQUEST_ATTEMPT_COUNT%
   HTTP
@@ -308,7 +328,7 @@ The following command operators are supported:
     Total number of bytes sent to the upstream by the tcp proxy.
 
   UDP
-    Not implemented (0).
+    Total number of bytes sent to the upstream stream, For UDP tunneling flows. Not supported for non-tunneling.
 
 %UPSTREAM_WIRE_BYTES_RECEIVED%
   HTTP
@@ -318,21 +338,27 @@ The following command operators are supported:
     Total number of bytes received from the upstream by the tcp proxy.
 
   UDP
-    Not implemented (0).
+    Total number of bytes received from the upstream stream, For UDP tunneling flows. Not supported for non-tunneling.
 
 %UPSTREAM_HEADER_BYTES_SENT%
   HTTP
     Number of header bytes sent to the upstream by the http stream.
 
-  TCP/UDP
+  TCP
     Not implemented (0).
+
+  UDP
+    Total number of HTTP header bytes sent to the upstream stream, For UDP tunneling flows. Not supported for non-tunneling.
 
 %UPSTREAM_HEADER_BYTES_RECEIVED%
   HTTP
     Number of header bytes received from the upstream by the http stream.
 
-  TCP/UDP
+  TCP
     Not implemented (0).
+
+  UDP
+    Total number of HTTP header bytes received from the upstream stream, For UDP tunneling flows. Not supported for non-tunneling.
 
 %DOWNSTREAM_WIRE_BYTES_SENT%
   HTTP
@@ -383,6 +409,37 @@ The following command operators are supported:
     Not implemented (0).
 
   Renders a numeric value in typed JSON logs.
+
+.. _config_access_log_format_common_duration:
+
+%COMMON_DURATION(START:END:PRECISION)%
+  HTTP
+    Total duration between the START time point and the END time point in specific PRECISION.
+    The START and END time points are specified by the following values (NOTE: all values
+    here are case-sensitive):
+
+    * ``DS_RX_BEG``: The time point of the downstream request receiving begin.
+    * ``DS_RX_END``: The time point of the downstream request receiving end.
+    * ``US_TX_BEG``: The time point of the upstream request sending begin.
+    * ``US_TX_END``: The time point of the upstream request sending end.
+    * ``US_RX_BEG``: The time point of the upstream response receiving begin.
+    * ``US_RX_END``: The time point of the upstream response receiving end.
+    * ``DS_TX_BEG``: The time point of the downstream response sending begin.
+    * ``DS_TX_END``: The time point of the downstream response sending end.
+    * Dynamic value: Other values will be treated as custom time points that are set by named keys.
+
+    The PRECISION is specified by the following values (NOTE: all values here are case-sensitive):
+
+    * ``ms``: Millisecond precision.
+    * ``us``: Microsecond precision.
+    * ``ns``: Nanosecond precision.
+
+    NOTE: enabling independent half-close behavior for H/2 and H/3 protocols can produce
+    ``*_TX_END`` values lower than ``*_RX_END`` values, in cases where upstream peer has half-closed
+    its stream before downstream peer. In these cases ``COMMON_DURATION`` value will become negative.
+
+  TCP/UDP
+    Not implemented ("-").
 
 %REQUEST_DURATION%
   HTTP
@@ -448,11 +505,20 @@ The following command operators are supported:
 
   Renders a numeric value in typed JSON logs.
 
+%UPSTREAM_CONNECTION_POOL_READY_DURATION%
+  HTTP/TCP
+    Total duration in milliseconds from when the upstream request was created to when the connection pool is ready.
+
+  UDP
+    Not implemented ("-").
+
+  Renders a numeric value in typed JSON logs.
+
 .. _config_access_log_format_response_flags:
 
 %RESPONSE_FLAGS% / %RESPONSE_FLAGS_LONG%
   Additional details about the response or connection, if any. For TCP connections, the response codes mentioned in
-  the descriptions do not apply. %RESPONSE_FLAGS% will outout a short string. %RESPONSE_FLAGS% will outout a Pascal case string.
+  the descriptions do not apply. %RESPONSE_FLAGS% will output a short string. %RESPONSE_FLAGS_LONG% will output a Pascal case string.
   Possible values are:
 
 HTTP and TCP
@@ -491,8 +557,12 @@ HTTP only
   **DownstreamProtocolError**, **DPE**, The downstream request had an HTTP protocol error.
   **UpstreamProtocolError**, **UPE**, The upstream response had an HTTP protocol error.
   **UpstreamMaxStreamDurationReached**, **UMSDR**, The upstream request reached max stream duration.
+  **ResponseFromCacheFilter**, **RFCF**, The response was served from an Envoy cache filter.
+  **NoFilterConfigFound**, **NFCF**, The request is terminated because filter configuration was not received within the permitted warming deadline.
   **OverloadManagerTerminated**, **OM**, Overload Manager terminated the request.
   **DnsResolutionFailed**, **DF**, The request was terminated due to DNS resolution failure.
+  **DropOverload**, **DO**, The request was terminated in addition to 503 response code due to :ref:`drop_overloads<envoy_v3_api_field_config.endpoint.v3.ClusterLoadAssignment.Policy.drop_overloads>`.
+  **DownstreamRemoteReset**, **DR**, The response details are ``http2.remote_reset`` or ``http2.remote_refuse``.
 
 UDP
   Not implemented ("-").
@@ -514,12 +584,21 @@ UDP
 .. _config_access_log_format_upstream_host:
 
 %UPSTREAM_HOST%
-  Upstream host URL (e.g., tcp://ip:port for TCP connections). Identical to the :ref:`UPSTREAM_REMOTE_ADDRESS
-  <config_access_log_format_upstream_remote_address>` value.
+  Main address of upstream host (e.g., ip:port for TCP connections).
+
+.. _config_access_log_format_upstream_host_name:
+
+%UPSTREAM_HOST_NAME%
+  Upstream host name (e.g., DNS name). If no DNS name is available, the main address of the upstream host
+  (e.g., ip:port for TCP connections) will be used.
 
 %UPSTREAM_CLUSTER%
   Upstream cluster to which the upstream host belongs to. :ref:`alt_stat_name
   <envoy_v3_api_field_config.cluster.v3.Cluster.alt_stat_name>` will be used if provided.
+
+%UPSTREAM_CLUSTER_RAW%
+  Upstream cluster to which the upstream host belongs to. :ref:`alt_stat_name
+  <envoy_v3_api_field_config.cluster.v3.Cluster.alt_stat_name>` does NOT modify this value.
 
 %UPSTREAM_LOCAL_ADDRESS%
   Local address of the upstream connection. If the address is an IP address it includes both
@@ -537,7 +616,8 @@ UDP
 
 %UPSTREAM_REMOTE_ADDRESS%
   Remote address of the upstream connection. If the address is an IP address it includes both
-  address and port. Identical to the :ref:`UPSTREAM_HOST <config_access_log_format_upstream_host>` value.
+  address and port. Identical to the :ref:`UPSTREAM_HOST <config_access_log_format_upstream_host>` value if the upstream
+  host only has one address and connection is established successfully.
 
 %UPSTREAM_REMOTE_ADDRESS_WITHOUT_PORT%
   Remote address of the upstream connection, without any port component.
@@ -640,6 +720,12 @@ UDP
   If the original connection was redirected by iptables TPROXY, and the listener's transparent
   option was set to true, this represents the original destination address and port.
 
+  .. note::
+
+    This may not be the physical remote address of the peer if the address has been inferred from
+    :ref:`Proxy Protocol filter <config_listener_filters_proxy_protocol>` or :ref:`x-forwarded-for
+    <config_http_conn_man_headers_x-forwarded-for>`.
+
 %DOWNSTREAM_LOCAL_ADDRESS_WITHOUT_PORT%
   Local address of the downstream connection, without any port component.
   IP addresses are the only address type with a port component.
@@ -652,6 +738,15 @@ UDP
 
 %CONNECTION_ID%
   An identifier for the downstream connection. It can be used to
+  cross-reference TCP access logs across multiple log sinks, or to
+  cross-reference timer-based reports for the same connection. The identifier
+  is unique with high likelihood within an execution, but can duplicate across
+  multiple instances or between restarts.
+
+.. _config_access_log_format_upstream_connection_id:
+
+%UPSTREAM_CONNECTION_ID%
+  An identifier for the upstream connection. It can be used to
   cross-reference TCP access logs across multiple log sinks, or to
   cross-reference timer-based reports for the same connection. The identifier
   is unique with high likelihood within an execution, but can duplicate across
@@ -729,11 +824,11 @@ UDP
     when NAMESPACE is set to "udp.proxy.session", optional KEYs are as follows:
 
     * ``cluster_name``: Name of the cluster.
-    * ``bytes_sent``: Total number of downstream bytes sent to the upstream in the session.
-    * ``bytes_received``: Total number of downstream bytes received from the upstream in the session.
-    * ``errors_sent``: Number of errors that have occurred when sending datagrams to the upstream in the session.
-    * ``datagrams_sent``: Number of datagrams sent to the upstream successfully in the session.
-    * ``datagrams_received``: Number of datagrams received from the upstream successfully in the session.
+    * ``bytes_sent``: Total number of bytes sent to the downstream in the session. *Deprecated, use %BYTES_SENT% instead.*
+    * ``bytes_received``: Total number of bytes received from the downstream in the session. *Deprecated, use %BYTES_RECEIVED% instead.*
+    * ``errors_sent``: Number of errors that have occurred when sending datagrams to the downstream in the session.
+    * ``datagrams_sent``: Number of datagrams sent to the downstream in the session.
+    * ``datagrams_received``: Number of datagrams received from the downstream in the session.
 
     Recommended session access log format for UDP proxy:
 
@@ -748,12 +843,12 @@ UDP
 
     when NAMESPACE is set to "udp.proxy.proxy", optional KEYs are as follows:
 
-    * ``bytes_sent``: Total number of downstream bytes sent to the upstream in UDP proxy.
-    * ``bytes_received``: Total number of downstream bytes received from the upstream in UDP proxy.
-    * ``errors_sent``: Number of errors that have occurred when sending datagrams to the upstream in UDP proxy.
-    * ``errors_received``: Number of errors that have occurred when receiving datagrams from the upstream in UDP proxy.
-    * ``datagrams_sent``: Number of datagrams sent to the upstream successfully in UDP proxy.
-    * ``datagrams_received``: Number of datagrams received from the upstream successfully in UDP proxy.
+    * ``bytes_sent``: Total number of bytes sent to the downstream in UDP proxy. *Deprecated, use %BYTES_SENT% instead.*
+    * ``bytes_received``: Total number of bytes received from the downstream in UDP proxy. *Deprecated, use %BYTES_RECEIVED% instead.*
+    * ``errors_sent``: Number of errors that have occurred when sending datagrams to the downstream in UDP proxy.
+    * ``errors_received``: Number of errors that have occurred when receiving datagrams from the downstream in UDP proxy.
+    * ``datagrams_sent``: Number of datagrams sent to the downstream in UDP proxy.
+    * ``datagrams_received``: Number of datagrams received from the downstream in UDP proxy.
     * ``no_route``: Number of times that no upstream cluster found in UDP proxy.
     * ``session_total``: Total number of sessions in UDP proxy.
     * ``idle_timeout``: Number of times that sessions idle timeout occurred in UDP proxy.
@@ -972,6 +1067,30 @@ UDP
   UDP
     Not implemented ("-").
 
+%DOWNSTREAM_LOCAL_EMAIL_SAN%
+  HTTP/TCP/THRIFT
+    The emails present in the SAN of the local certificate used to establish the downstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%DOWNSTREAM_PEER_EMAIL_SAN%
+  HTTP/TCP/THRIFT
+    The emails present in the SAN of the peer certificate used to establish the downstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%DOWNSTREAM_LOCAL_OTHERNAME_SAN%
+  HTTP/TCP/THRIFT
+    The OtherNames present in the SAN of the local certificate used to establish the downstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%DOWNSTREAM_PEER_OTHERNAME_SAN%
+  HTTP/TCP/THRIFT
+    The OtherNames present in the SAN of the peer certificate used to establish the downstream TLS connection.
+  UDP
+    Not implemented ("-").
+
 %DOWNSTREAM_LOCAL_SUBJECT%
   HTTP/TCP/THRIFT
     The subject present in the local certificate used to establish the downstream TLS connection.
@@ -1023,6 +1142,24 @@ UDP
 %DOWNSTREAM_PEER_SERIAL%
   HTTP/TCP/THRIFT
     The serial number of the client certificate used to establish the downstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%DOWNSTREAM_PEER_CHAIN_FINGERPRINTS_256%
+  HTTP/TCP/THRIFT
+    The comma-separated hex-encoded SHA256 fingerprints of all client certificates used to establish the downstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%DOWNSTREAM_PEER_CHAIN_FINGERPRINTS_1%
+  HTTP/TCP/THRIFT
+    The comma-separated hex-encoded SHA1 fingerprints of all client certificates used to establish the downstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%DOWNSTREAM_PEER_CHAIN_SERIALS%
+  HTTP/TCP/THRIFT
+    The comma-separated wserial numbers of all client certificates used to establish the downstream TLS connection.
   UDP
     Not implemented ("-").
 
@@ -1112,6 +1249,42 @@ UDP
   UPSTREAM_PEER_CERT_V_END can be customized using a `format string <https://en.cppreference.com/w/cpp/io/manip/put_time>`_.
   See :ref:`START_TIME <config_access_log_format_start_time>` for additional format specifiers and examples.
 
+%UPSTREAM_PEER_URI_SAN%
+  HTTP/TCP/THRIFT
+    The URIs present in the SAN of the peer certificate used to establish the upstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%UPSTREAM_PEER_DNS_SAN%
+  HTTP/TCP/THRIFT
+    The DNS names present in the SAN of the peer certificate used to establish the upstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%UPSTREAM_PEER_IP_SAN%
+  HTTP/TCP/THRIFT
+    The ip addresses present in the SAN of the peer certificate used to establish the upstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%UPSTREAM_LOCAL_URI_SAN%
+  HTTP/TCP/THRIFT
+    The URIs present in the SAN of the local certificate used to establish the upstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%UPSTREAM_LOCAL_DNS_SAN%
+  HTTP/TCP/THRIFT
+    The DNS names present in the SAN of the local certificate used to establish the upstream TLS connection.
+  UDP
+    Not implemented ("-").
+
+%UPSTREAM_LOCAL_IP_SAN%
+  HTTP/TCP/THRIFT
+    The ip addresses present in the SAN of the local certificate used to establish the upstream TLS connection.
+  UDP
+    Not implemented ("-").
+
 %HOSTNAME%
   The system hostname.
 
@@ -1138,7 +1311,20 @@ UDP
   * UpstreamPoolReady - When a new HTTP request is received by the HTTP Router filter.
   * UpstreamPeriodic - On any HTTP Router filter periodic log record.
   * UpstreamEnd - When an HTTP request is finished on the HTTP Router filter.
+  * UdpTunnelUpstreamConnected - When UDP Proxy filter has successfully established an upstream connection.
+                                 Note: It is only relevant for UDP tunneling over HTTP.
+  * UdpPeriodic - On any UDP Proxy filter periodic log record.
+  * UdpSessionEnd - When a UDP session is ended on UDP Proxy filter.
+
+%UNIQUE_ID%
+   A unique identifier (UUID) that is generated dynamically.
 
 %ENVIRONMENT(X):Z%
   Environment value of environment variable X. If no valid environment variable X, '-' symbol will be used.
   Z is an optional parameter denoting string truncation up to Z characters long.
+
+%TRACE_ID%
+  HTTP
+    The trace ID of the request. If the request does not have a trace ID, this will be an empty string.
+  TCP/UDP
+    Not implemented ("-").

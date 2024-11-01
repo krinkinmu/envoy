@@ -77,6 +77,29 @@ public:
 };
 
 /**
+ * Implemented by each UDP session filter and registered via Registry::registerFactory or the
+ * convenience class RegisterFactory.
+ */
+class NamedUdpSessionFilterConfigFactory : public Envoy::Config::TypedFactory {
+public:
+  ~NamedUdpSessionFilterConfigFactory() override = default;
+
+  /**
+   * Create a particular UDP session filter factory implementation. If the implementation is
+   * unable to produce a factory with the provided parameters, it should throw an EnvoyException
+   * in the case of general error. The returned callback should always be initialized.
+   * @param config supplies the configuration for the filter
+   * @param context supplies the filter's context.
+   * @return UdpSessionFilterFactoryCb the factory creation function.
+   */
+  virtual Network::UdpSessionFilterFactoryCb
+  createFilterFactoryFromProto(const Protobuf::Message& config,
+                               Server::Configuration::FactoryContext& context) PURE;
+
+  std::string category() const override { return "envoy.filters.udp.session"; }
+};
+
+/**
  * Implemented by each QUIC listener filter and registered via Registry::registerFactory()
  * or the convenience class RegisterFactory.
  */
@@ -117,8 +140,9 @@ public:
    * @param config supplies the protobuf configuration for the filter
    * @param validation_visitor message validation visitor instance.
    * @return Upstream::ProtocolOptionsConfigConstSharedPtr the protocol options
+   * or an error message.
    */
-  virtual Upstream::ProtocolOptionsConfigConstSharedPtr
+  virtual absl::StatusOr<Upstream::ProtocolOptionsConfigConstSharedPtr>
   createProtocolOptionsConfig(const Protobuf::Message& config,
                               ProtocolOptionsFactoryContext& factory_context) {
     UNREFERENCED_PARAMETER(config);
@@ -147,9 +171,9 @@ public:
    * callback should always be initialized.
    * @param config supplies the general json configuration for the filter
    * @param filter_chain_factory_context supplies the filter's context.
-   * @return Network::FilterFactoryCb the factory creation function.
+   * @return Network::FilterFactoryCb the factory creation function or an error status.
    */
-  virtual Network::FilterFactoryCb
+  virtual absl::StatusOr<Network::FilterFactoryCb>
   createFilterFactoryFromProto(const Protobuf::Message& config,
                                FactoryContext& filter_chain_factory_context) PURE;
 
@@ -279,9 +303,10 @@ public:
    * configuration.
    * @param stat_prefix prefix for stat logging
    * @param context supplies the filter's context.
-   * @return Http::FilterFactoryCb the factory creation function.
+   * @return  absl::StatusOr<Http::FilterFactoryCb> the factory creation function or an error if
+   * creation fails.
    */
-  virtual Http::FilterFactoryCb
+  virtual absl::StatusOr<Http::FilterFactoryCb>
   createFilterFactoryFromProto(const Protobuf::Message& config, const std::string& stat_prefix,
                                Server::Configuration::FactoryContext& context) PURE;
 
@@ -316,7 +341,7 @@ public:
    * @param context supplies the filter's context.
    * @return Http::FilterFactoryCb the factory creation function.
    */
-  virtual Http::FilterFactoryCb
+  virtual absl::StatusOr<Http::FilterFactoryCb>
   createFilterFactoryFromProto(const Protobuf::Message& config, const std::string& stat_prefix,
                                Server::Configuration::UpstreamFactoryContext& context) PURE;
 };

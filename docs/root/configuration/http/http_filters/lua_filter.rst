@@ -365,8 +365,10 @@ trailers()
 
   local trailers = handle:trailers()
 
-Returns the stream's trailers. May return nil if there are no trailers. The trailers may be
-modified before they are sent to the next filter.
+Returns the stream's trailers. Before calling this method, the caller should call ``body()`` or
+``bodyChunks()`` to consume the body, otherwise the trailers will not be available.
+May return nil if there are no trailers. The trailers may be modified before they are sent
+to the next filter.
 
 Returns a :ref:`header object <config_http_filters_lua_header_wrapper>`.
 
@@ -414,7 +416,7 @@ the supported keys are:
   It refers to the same *asynchronous* flag as the first function signature.
 - *timeout_ms* is an integer that specifies the call timeout in milliseconds.
   It refers to the same *timeout_ms* argument as the first function signature.
-- *trace_sampled* is a boolean flag that decides whether the produced trace span will be sampled or not.
+- *trace_sampled* is a boolean flag that decides whether the produced trace span will be sampled or not. If not provided, the sampling decision of the parent span is used.
 - *return_duplicate_headers* is boolean flag that decides whether the repeated headers are allowed in response headers.
   If the *return_duplicate_headers* is set to false (default), the returned *headers* is table with value type of string.
   If the *return_duplicate_headers* is set to true, the returned *headers* is table with value type of string or value type
@@ -544,6 +546,17 @@ connection()
 Returns the current request's underlying :repo:`connection <envoy/network/connection.h>`.
 
 Returns a :ref:`connection object <config_http_filters_lua_connection_wrapper>`.
+
+connectionStreamInfo()
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: lua
+
+  local connectionStreamInfo = handle:connectionStreamInfo()
+
+Returns connection-level :repo:`information <envoy/stream_info/stream_info.h>` related to the current request.
+
+Returns a connection-level :ref:`stream info object <config_http_filters_lua_cx_stream_info_wrapper>`.
 
 importPublicKey()
 ^^^^^^^^^^^^^^^^^
@@ -848,6 +861,20 @@ requestedServerName()
 Returns the string representation of :repo:`requested server name <envoy/stream_info/stream_info.h>`
 (e.g. SNI in TLS) for the current request if present.
 
+.. _config_http_filters_lua_cx_stream_info_wrapper:
+
+Connection stream info object API
+---------------------------------
+
+dynamicMetadata()
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: lua
+
+  connectionStreamInfo:dynamicMetadata()
+
+Returns a :ref:`dynamic metadata object <config_http_filters_lua_stream_info_dynamic_metadata_wrapper>`.
+
 Dynamic metadata object API
 ---------------------------
 
@@ -1074,6 +1101,28 @@ dnsSansLocalCertificate()
 
 Returns the DNS entries (as a table) in the SAN field of the local certificate. Returns an empty
 table if there is no local certificate, or no SAN field, or no DNS SAN entries.
+
+oidsPeerCertificate()
+^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: lua
+
+  downstreamSslConnection:oidsPeerCertificate()
+
+Returns the string representation of OIDs (as a table) from the peer certificate. This is for
+reading the OID strings from the certificate, not the extension values associated with OIDs.
+Returns an empty table if there is no peer certificate or no OIDs.
+
+oidsLocalCertificate()
+^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: lua
+
+  downstreamSslConnection:oidsLocalCertificate()
+
+Returns the string representation of OIDs (as a table) from the local certificate. This is for
+reading the OID strings from the certificate, not the extension values associated with OIDs.
+Returns an empty table if there is no local certificate or no OIDs.
 
 validFromPeerCertificate()
 ^^^^^^^^^^^^^^^^^^^^^^^^^^

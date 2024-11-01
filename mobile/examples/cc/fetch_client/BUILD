@@ -1,12 +1,12 @@
 load(
     "@envoy//bazel:envoy_build_system.bzl",
     "envoy_cc_library",
-    "envoy_package",
+    "envoy_mobile_package",
 )
 
 licenses(["notice"])  # Apache 2
 
-envoy_package()
+envoy_mobile_package()
 
 envoy_cc_library(
     name = "fetch_client_lib",
@@ -22,6 +22,7 @@ envoy_cc_library(
         "//library/common/http:client_lib",
         "//library/common/http:header_utility_lib",
         "//library/common/types:c_types_lib",
+        "@com_google_absl//absl/synchronization",
         "@envoy//envoy/http:header_map_interface",
         "@envoy//source/common/http:header_map_lib",
     ],

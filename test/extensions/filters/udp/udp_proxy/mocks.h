@@ -1,6 +1,5 @@
 #pragma once
 
-#include "source/extensions/filters/udp/udp_proxy/session_filters/filter.h"
 #include "source/extensions/filters/udp/udp_proxy/udp_proxy_filter.h"
 
 #include "test/mocks/stream_info/mocks.h"
@@ -15,21 +14,21 @@ namespace UdpFilters {
 namespace UdpProxy {
 namespace SessionFilters {
 
-class MockReadFilterCallbacks : public ReadFilterCallbacks {
+class MockReadFilterCallbacks : public Network::UdpSessionReadFilterCallbacks {
 public:
   MockReadFilterCallbacks();
   ~MockReadFilterCallbacks() override;
 
   MOCK_METHOD(uint64_t, sessionId, (), (const));
   MOCK_METHOD(StreamInfo::StreamInfo&, streamInfo, ());
-  MOCK_METHOD(void, continueFilterChain, ());
+  MOCK_METHOD(bool, continueFilterChain, ());
   MOCK_METHOD(void, injectDatagramToFilterChain, (Network::UdpRecvData & data));
 
   uint64_t session_id_{1};
   NiceMock<StreamInfo::MockStreamInfo> stream_info_;
 };
 
-class MockWriteFilterCallbacks : public WriteFilterCallbacks {
+class MockWriteFilterCallbacks : public Network::UdpSessionWriteFilterCallbacks {
 public:
   MockWriteFilterCallbacks();
   ~MockWriteFilterCallbacks() override;
@@ -58,6 +57,14 @@ public:
   MOCK_METHOD(bool, bufferEnabled, (), (const));
   MOCK_METHOD(uint32_t, maxBufferedDatagrams, (), (const));
   MOCK_METHOD(uint64_t, maxBufferedBytes, (), (const));
+  MOCK_METHOD(void, propagateResponseHeaders,
+              (Http::ResponseHeaderMapPtr && headers,
+               const StreamInfo::FilterStateSharedPtr& filter_state),
+              (const));
+  MOCK_METHOD(void, propagateResponseTrailers,
+              (Http::ResponseTrailerMapPtr && trailers,
+               const StreamInfo::FilterStateSharedPtr& filter_state),
+              (const));
 
   std::string default_proxy_host_ = "default.host.com";
   std::string default_target_host_ = "default.target.host";
@@ -97,6 +104,7 @@ public:
   MOCK_METHOD(void, onStreamFailure,
               (ConnectionPool::PoolFailureReason reason, absl::string_view failure_reason,
                Upstream::HostDescriptionConstSharedPtr host));
+  MOCK_METHOD(void, resetIdleTimer, ());
 };
 
 } // namespace SessionFilters

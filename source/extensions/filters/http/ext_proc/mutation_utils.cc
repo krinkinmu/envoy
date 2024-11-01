@@ -61,12 +61,7 @@ void MutationUtils::headersToProto(
     if (headerCanBeForwarded(e.key().getStringView(), allowed_headers, disallowed_headers)) {
       auto* new_header = proto_out.add_headers();
       new_header->set_key(std::string(e.key().getStringView()));
-      // Setting up value or raw_value field based on the runtime flag.
-      if (Runtime::runtimeFeatureEnabled("envoy.reloadable_features.send_header_raw_value")) {
-        new_header->set_raw_value(std::string(e.value().getStringView()));
-      } else {
-        new_header->set_value(MessageUtil::sanitizeUtf8String(e.value().getStringView()));
-      }
+      new_header->set_raw_value(std::string(e.value().getStringView()));
     }
     return Http::HeaderMap::Iterate::Continue;
   });
@@ -114,7 +109,8 @@ absl::Status MutationUtils::headerMutationResultCheck(const Http::HeaderMap& hea
 absl::Status MutationUtils::applyHeaderMutations(const HeaderMutation& mutation,
                                                  Http::HeaderMap& headers, bool replacing_message,
                                                  const Checker& checker,
-                                                 Counter& rejected_mutations) {
+                                                 Counter& rejected_mutations,
+                                                 bool remove_content_length) {
   // Check whether the remove_headers or set_headers size exceed the HTTP connection manager limit.
   // Reject the mutation and return error status if either one does.
   const auto result = responseHeaderSizeCheck(headers, mutation, rejected_mutations);
@@ -151,21 +147,13 @@ absl::Status MutationUtils::applyHeaderMutations(const HeaderMutation& mutation,
       continue;
     }
 
-    // Only one of value or raw_value in the HeaderValue message should be set.
-    if (!sh.header().value().empty() && !sh.header().raw_value().empty()) {
-      ENVOY_LOG(debug, "Only one of value or raw_value in the HeaderValue message should be set, "
-                       "may not be append.");
-      rejected_mutations.inc();
-      return absl::InvalidArgumentError(
-          "Only one of value or raw_value in the HeaderValue message should be set.");
+    // Always skip setting content length header when `remove_content_length` is true.
+    if (remove_content_length &&
+        absl::EqualsIgnoreCase(sh.header().key(), Http::Headers::get().ContentLength)) {
+      continue;
     }
 
-    absl::string_view header_value;
-    if (Runtime::runtimeFeatureEnabled("envoy.reloadable_features.send_header_raw_value")) {
-      header_value = sh.header().raw_value();
-    } else {
-      header_value = sh.header().value();
-    }
+    const absl::string_view header_value = sh.header().raw_value();
     if (!Http::HeaderUtility::headerNameIsValid(sh.header().key()) ||
         !Http::HeaderUtility::headerValueIsValid(header_value)) {
       ENVOY_LOG(debug,

@@ -170,12 +170,14 @@ public:
   // filter. We need to figure out if we can remove this header from the set of headers that
   // participate in prefix overrides.
   const LowerCaseString EnvoyIpTags{absl::StrCat(prefix(), "-ip-tags")};
+  const LowerCaseString EnvoyLocalOverloaded{absl::StrCat(prefix(), "-local-overloaded")};
   const LowerCaseString EnvoyMaxRetries{absl::StrCat(prefix(), "-max-retries")};
   const LowerCaseString EnvoyNotForwarded{absl::StrCat(prefix(), "-not-forwarded")};
   const LowerCaseString EnvoyOriginalDstHost{absl::StrCat(prefix(), "-original-dst-host")};
   const LowerCaseString EnvoyOriginalMethod{absl::StrCat(prefix(), "-original-method")};
   const LowerCaseString EnvoyOriginalPath{absl::StrCat(prefix(), "-original-path")};
   const LowerCaseString EnvoyOverloaded{absl::StrCat(prefix(), "-overloaded")};
+  const LowerCaseString EnvoyDropOverload{absl::StrCat(prefix(), "-drop-overload")};
   const LowerCaseString EnvoyRateLimited{absl::StrCat(prefix(), "-ratelimited")};
   const LowerCaseString EnvoyRetryOn{absl::StrCat(prefix(), "-retry-on")};
   const LowerCaseString EnvoyRetryGrpcOn{absl::StrCat(prefix(), "-retry-grpc-on")};
@@ -265,6 +267,7 @@ public:
     const std::string Json{"application/json"};
     const std::string Protobuf{"application/x-protobuf"};
     const std::string FormUrlEncoded{"application/x-www-form-urlencoded"};
+    const std::string Thrift{"application/x-thrift"};
   } ContentTypeValues;
 
   struct {
@@ -281,6 +284,10 @@ public:
 
   struct {
     const std::string True{"true"};
+  } EnvoyDropOverloadValues;
+
+  struct {
+    const std::string True{"true"};
   } EnvoyRateLimitedValues;
 
   struct {
@@ -293,6 +300,7 @@ public:
     const std::string RetriableStatusCodes{"retriable-status-codes"};
     const std::string RetriableHeaders{"retriable-headers"};
     const std::string Reset{"reset"};
+    const std::string ResetBeforeRequest{"reset-before-request"};
     const std::string Http3PostConnectFailure{"http3-post-connect-failure"};
   } EnvoyRetryOnValues;
 
@@ -342,6 +350,7 @@ public:
 
   struct {
     const std::string EnvoyHealthChecker{"Envoy/HC"};
+    const std::string GoBrowser{"Go-browser"};
   } UserAgentValues;
 
   struct {

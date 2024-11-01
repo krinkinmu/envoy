@@ -30,8 +30,11 @@ ActionFactory::createActionFactoryCb(const Protobuf::Message& proto_config,
   const auto& config =
       MessageUtil::downcastAndValidate<const envoy::config::core::v3::SubstitutionFormatString&>(
           proto_config, validator);
-  Formatter::FormatterConstSharedPtr formatter =
-      Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config, context);
+
+  Server::GenericFactoryContextImpl generic_context(context, validator);
+  Formatter::FormatterConstSharedPtr formatter = THROW_OR_RETURN_VALUE(
+      Formatter::SubstitutionFormatStringUtils::fromProtoConfig(config, generic_context),
+      Formatter::FormatterBasePtr<Formatter::HttpFormatterContext>);
   return [formatter]() { return std::make_unique<ActionImpl>(formatter); };
 }
 

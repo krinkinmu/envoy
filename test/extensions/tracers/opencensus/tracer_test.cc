@@ -11,7 +11,7 @@
 #include "source/extensions/tracers/opencensus/opencensus_tracer_impl.h"
 
 #include "test/mocks/http/mocks.h"
-#include "test/mocks/local_info/mocks.h"
+#include "test/mocks/server/server_factory_context.h"
 #include "test/mocks/stream_info/mocks.h"
 #include "test/mocks/tracing/mocks.h"
 
@@ -102,12 +102,11 @@ void registerSpanCatcher() {
 TEST(OpenCensusTracerTest, Span) {
   registerSpanCatcher();
   OpenCensusConfig oc_config;
-  NiceMock<LocalInfo::MockLocalInfo> local_info;
-  std::unique_ptr<Tracing::Driver> driver(
-      new OpenCensus::Driver(oc_config, local_info, *Api::createApiForTest()));
+  NiceMock<Server::Configuration::MockServerFactoryContext> context;
+  std::unique_ptr<Tracing::Driver> driver(new OpenCensus::Driver(oc_config, context));
 
   NiceMock<Tracing::MockConfig> config;
-  Http::TestRequestHeaderMapImpl request_headers{
+  Tracing::TestTraceContextImpl request_headers{
       {":path", "/"}, {":method", "GET"}, {"x-request-id", "foo"}};
   const std::string operation_name{"my_operation_1"};
   SystemTime fake_system_time;
@@ -130,7 +129,10 @@ TEST(OpenCensusTracerTest, Span) {
     ASSERT_EQ("", span->getBaggage("baggage_key"));
 
     // Trace id is automatically created when no parent context exists.
-    ASSERT_NE(span->getTraceIdAsHex(), "");
+    ASSERT_NE(span->getTraceId(), "");
+
+    // Span id should be empty since this is not yet supported.
+    ASSERT_EQ(span->getSpanId(), "");
   }
 
   // Retrieve SpanData from the OpenCensus trace exporter.
@@ -177,10 +179,10 @@ MATCHER_P2(ContainHeader, header, expected_value,
            "contains the header " + PrintToString(header) + " with value " +
                PrintToString(expected_value)) {
   const auto found_value = arg.get(Http::LowerCaseString(header));
-  if (found_value.empty()) {
+  if (!found_value.has_value()) {
     return false;
   }
-  return found_value[0]->value().getStringView() == expected_value;
+  return found_value.value() == expected_value;
 }
 
 // Given incoming headers, test that trace context propagation works and generates all the expected
@@ -189,7 +191,6 @@ void testIncomingHeaders(
     const std::initializer_list<std::pair<const char*, const char*>>& headers) {
   registerSpanCatcher();
   OpenCensusConfig oc_config;
-  NiceMock<LocalInfo::MockLocalInfo> local_info;
   oc_config.add_incoming_trace_context(OpenCensusConfig::NONE);
   oc_config.add_incoming_trace_context(OpenCensusConfig::B3);
   oc_config.add_incoming_trace_context(OpenCensusConfig::TRACE_CONTEXT);
@@ -200,30 +201,32 @@ void testIncomingHeaders(
   oc_config.add_outgoing_trace_context(OpenCensusConfig::TRACE_CONTEXT);
   oc_config.add_outgoing_trace_context(OpenCensusConfig::GRPC_TRACE_BIN);
   oc_config.add_outgoing_trace_context(OpenCensusConfig::CLOUD_TRACE_CONTEXT);
-  std::unique_ptr<Tracing::Driver> driver(
-      new OpenCensus::Driver(oc_config, local_info, *Api::createApiForTest()));
+  NiceMock<Server::Configuration::MockServerFactoryContext> context;
+  std::unique_ptr<Tracing::Driver> driver(new OpenCensus::Driver(oc_config, context));
   NiceMock<Tracing::MockConfig> config;
-  Http::TestRequestHeaderMapImpl request_headers{
+  Tracing::TestTraceContextImpl request_headers{
       {":path", "/"},
       {":method", "GET"},
       {"x-request-id", "foo"},
   };
   for (const auto& kv : headers) {
-    request_headers.addCopy(Http::LowerCaseString(kv.first), kv.second);
+    request_headers.set(Http::LowerCaseString(kv.first), kv.second);
   }
 
   const std::string operation_name{"my_operation_2"};
   NiceMock<StreamInfo::MockStreamInfo> stream_info;
-  Http::TestRequestHeaderMapImpl injected_headers;
+  Tracing::TestTraceContextImpl injected_headers{};
   {
     Tracing::SpanPtr span = driver->startSpan(config, request_headers, stream_info, operation_name,
                                               {Tracing::Reason::Sampling, false});
-    span->injectContext(injected_headers, nullptr);
+    span->injectContext(injected_headers, Tracing::UpstreamContext());
     span->finishSpan();
 
     // Check contents via public API.
     // Trace id is set via context propagation headers.
-    EXPECT_EQ(span->getTraceIdAsHex(), "404142434445464748494a4b4c4d4e4f");
+    EXPECT_EQ(span->getTraceId(), "404142434445464748494a4b4c4d4e4f");
+    // TODO(#34412) This method is unimplemented.
+    EXPECT_EQ(span->getSpanId(), "");
   }
 
   // Retrieve SpanData from the OpenCensus trace exporter.
@@ -291,9 +294,8 @@ namespace {
 // the exporter (either zero or one).
 int samplerTestHelper(const OpenCensusConfig& oc_config) {
   registerSpanCatcher();
-  NiceMock<LocalInfo::MockLocalInfo> local_info;
-  std::unique_ptr<Tracing::Driver> driver(
-      new OpenCensus::Driver(oc_config, local_info, *Api::createApiForTest()));
+  NiceMock<Server::Configuration::MockServerFactoryContext> context;
+  std::unique_ptr<Tracing::Driver> driver(new OpenCensus::Driver(oc_config, context));
   auto span = ::opencensus::trace::Span::StartSpan("test_span");
   span.End();
   // Retrieve SpanData from the OpenCensus trace exporter.
@@ -314,6 +316,13 @@ TEST(OpenCensusTracerTest, ConstantSamplerAlwaysOn) {
   oc_config.mutable_trace_config()->mutable_constant_sampler()->set_decision(
       ::opencensus::proto::trace::v1::ConstantSampler::ALWAYS_ON);
   EXPECT_EQ(1, samplerTestHelper(oc_config));
+}
+
+// Test no sampler set.
+TEST(OpenCensusTracerTest, NoSamplerSet) {
+  OpenCensusConfig oc_config;
+  oc_config.mutable_trace_config();
+  samplerTestHelper(oc_config);
 }
 
 // Test constant_sampler that's always off.

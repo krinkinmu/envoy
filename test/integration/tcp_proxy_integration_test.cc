@@ -12,9 +12,10 @@
 
 #include "source/common/config/api_version.h"
 #include "source/common/network/utility.h"
+#include "source/common/tls/context_manager_impl.h"
 #include "source/extensions/filters/network/common/factory_base.h"
-#include "source/extensions/transport_sockets/tls/context_manager_impl.h"
 
+#include "test/integration/fake_access_log.h"
 #include "test/integration/ssl_utility.h"
 #include "test/integration/tcp_proxy_integration_test.pb.h"
 #include "test/integration/tcp_proxy_integration_test.pb.validate.h"
@@ -528,7 +529,7 @@ TEST_P(TcpProxyIntegrationTest, AccessLogOnUpstreamConnect) {
     envoy::extensions::access_loggers::file::v3::FileAccessLog access_log_config;
     access_log_config.set_path(access_log_path);
     access_log_config.mutable_log_format()->mutable_text_format_source()->set_inline_string(
-        "ACCESS_LOG_TYPE=%ACCESS_LOG_TYPE%");
+        "%ACCESS_LOG_TYPE%-%UPSTREAM_CONNECTION_ID%\n");
     access_log->mutable_typed_config()->PackFrom(access_log_config);
     config_blob->PackFrom(tcp_proxy_config);
   });
@@ -540,9 +541,12 @@ TEST_P(TcpProxyIntegrationTest, AccessLogOnUpstreamConnect) {
 
   ASSERT_TRUE(fake_upstreams_[0]->waitForRawConnection(fake_upstream_connection));
   auto log_result = waitForAccessLog(access_log_path);
-  EXPECT_EQ(absl::StrCat("ACCESS_LOG_TYPE=",
-                         AccessLogType_Name(AccessLog::AccessLogType::TcpUpstreamConnected)),
-            log_result);
+  std::vector<std::string> access_log_parts = absl::StrSplit(log_result, '-');
+  EXPECT_EQ(AccessLogType_Name(AccessLog::AccessLogType::TcpUpstreamConnected),
+            access_log_parts[0]);
+  uint32_t upstream_connection_id;
+  ASSERT_TRUE(absl::SimpleAtoi(access_log_parts[1], &upstream_connection_id));
+  EXPECT_GT(upstream_connection_id, 0);
 
   ASSERT_TRUE(fake_upstream_connection->waitForData(5));
   ASSERT_TRUE(tcp_client->write("", true));
@@ -551,12 +555,12 @@ TEST_P(TcpProxyIntegrationTest, AccessLogOnUpstreamConnect) {
   ASSERT_TRUE(fake_upstream_connection->waitForDisconnect());
   tcp_client->waitForDisconnect();
   test_server_.reset();
-  log_result = waitForAccessLog(access_log_path);
-  EXPECT_EQ(
-      absl::StrCat(
-          "ACCESS_LOG_TYPE=", AccessLogType_Name(AccessLog::AccessLogType::TcpUpstreamConnected),
-          "ACCESS_LOG_TYPE=", AccessLogType_Name(AccessLog::AccessLogType::TcpConnectionEnd)),
-      log_result);
+
+  log_result = waitForAccessLog(access_log_path, 1);
+  access_log_parts = absl::StrSplit(log_result, '-');
+  EXPECT_EQ(AccessLogType_Name(AccessLog::AccessLogType::TcpConnectionEnd), access_log_parts[0]);
+  ASSERT_TRUE(absl::SimpleAtoi(access_log_parts[1], &upstream_connection_id));
+  EXPECT_GT(upstream_connection_id, 0);
 }
 
 TEST_P(TcpProxyIntegrationTest, PeriodicAccessLog) {
@@ -992,6 +996,46 @@ TEST_P(TcpProxyIntegrationTest, TestCloseOnHealthFailure) {
   ASSERT_TRUE(fake_upstream_connection->waitForDisconnect());
 }
 
+TEST_P(TcpProxyIntegrationTest, RecordsUpstreamConnectionTimeLatency) {
+  FakeAccessLogFactory factory;
+  factory.setLogCallback([](const Formatter::HttpFormatterContext&,
+                            const StreamInfo::StreamInfo& stream_info) {
+    EXPECT_TRUE(
+        stream_info.upstreamInfo()->upstreamTiming().connectionPoolCallbackLatency().has_value());
+  });
+
+  Registry::InjectFactory<AccessLog::AccessLogInstanceFactory> factory_register(factory);
+
+  config_helper_.addConfigModifier([](envoy::config::bootstrap::v3::Bootstrap& bootstrap) {
+    auto* filter_chain =
+        bootstrap.mutable_static_resources()->mutable_listeners(0)->mutable_filter_chains(0);
+    auto* config_blob = filter_chain->mutable_filters(0)->mutable_typed_config();
+
+    ASSERT_TRUE(config_blob->Is<envoy::extensions::filters::network::tcp_proxy::v3::TcpProxy>());
+    auto tcp_proxy_config =
+        MessageUtil::anyConvert<envoy::extensions::filters::network::tcp_proxy::v3::TcpProxy>(
+            *config_blob);
+
+    auto* access_log = tcp_proxy_config.add_access_log();
+    access_log->set_name("testaccesslog");
+    test::integration::accesslog::FakeAccessLog access_log_config;
+    access_log->mutable_typed_config()->PackFrom(access_log_config);
+    config_blob->PackFrom(tcp_proxy_config);
+  });
+
+  initialize();
+  IntegrationTcpClientPtr tcp_client = makeTcpConnection(lookupPort("tcp_proxy"));
+  FakeRawConnectionPtr fake_upstream_connection;
+  ASSERT_TRUE(fake_upstreams_[0]->waitForRawConnection(fake_upstream_connection));
+
+  ASSERT_TRUE(tcp_client->write("ping", true));
+  ASSERT_TRUE(fake_upstream_connection->write("pong", true));
+
+  tcp_client->waitForHalfClose();
+  ASSERT_TRUE(fake_upstream_connection->waitForHalfClose());
+  ASSERT_TRUE(fake_upstream_connection->waitForDisconnect());
+}
+
 class TcpProxyMetadataMatchIntegrationTest : public TcpProxyIntegrationTest {
 public:
   TcpProxyMetadataMatchIntegrationTest(uint32_t tcp_proxy_filter_index = 0)
@@ -1354,8 +1398,8 @@ TEST_P(TcpProxyDynamicMetadataMatchIntegrationTest, DynamicMetadataMatch) {
 
   expectEndpointToMatchRoute([](IntegrationTcpClient& tcp_client) -> std::string {
     // Break the write into two; validate that the first is received before sending the second. This
-    // validates that a downstream filter can use this functionality, even if it can't make a
-    // decision after the first `onData()`.
+    // validates that a downstream network filter can use this functionality, even if it can't make
+    // a decision after the first `onData()`.
     EXPECT_TRUE(tcp_client.write("p", false));
     tcp_client.waitForData("p");
     tcp_client.clearData();
@@ -1388,8 +1432,8 @@ void TcpProxySslIntegrationTest::initialize() {
   config_helper_.addSslConfig();
   TcpProxyIntegrationTest::initialize();
 
-  context_manager_ =
-      std::make_unique<Extensions::TransportSockets::Tls::ContextManagerImpl>(timeSystem());
+  context_manager_ = std::make_unique<Extensions::TransportSockets::Tls::ContextManagerImpl>(
+      server_factory_context_);
   payload_reader_ = std::make_shared<WaitForPayloadReader>(*dispatcher_);
 }
 

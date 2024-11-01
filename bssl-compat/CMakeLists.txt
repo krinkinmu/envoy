@@ -197,6 +197,19 @@ add_library(bssl-compat STATIC
   source/X509_STORE_CTX_set_verify_cb.cc
   source/X509_verify_cert_error_string.cc
   source/X509_VERIFY_PARAM_set_time_posix.cc
+  source/EC_KEY_set_private_key.cc
+  source/EC_KEY_get0_private_key.cc
+  source/EC_POINT_new.cc
+  source/EC_POINT_mul.cc
+  source/EC_KEY_set_public_key.cc
+  source/EC_POINT_free.cc
+  source/SSL_set_enforce_rsa_key_usage.cc
+  source/BN_bn2dec.cc
+  source/OBJ_cmp.cc
+  source/OBJ_obj2txt.cc
+  source/ASN1_ENUMERATED_to_BN.cc
+  source/X509_get_ext_count.cc
+  source/X509_EXTENSION_get_object.cc
 )
 
 target_add_bssl_include(bssl-compat

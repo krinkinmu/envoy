@@ -65,6 +65,11 @@ alias(
     actual = "//library/kotlin/io/envoyproxy/envoymobile:envoy_aar_with_artifacts",
 )
 
+alias(
+    name = "android_xds_dist",
+    actual = "//library/kotlin/io/envoyproxy/envoymobile:envoy_xds_aar_with_artifacts",
+)
+
 define_kt_toolchain(
     name = "kotlin_toolchain",
     jvm_target = "1.8",
@@ -149,12 +154,6 @@ xcodeproj(
                 "//test/swift/integration:test",
                 "//test/swift/stats:test",
                 "//test/swift:test",
-            ]),
-        ),
-        xcode_schemes.scheme(
-            name = "Swift C++ Interop Tests",
-            test_action = xcode_schemes.test_action([
-                "//test/swift/cxx:test",
             ]),
         ),
         xcode_schemes.scheme(

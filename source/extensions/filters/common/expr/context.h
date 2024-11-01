@@ -6,7 +6,9 @@
 #include "source/common/grpc/status.h"
 #include "source/common/http/header_utility.h"
 #include "source/common/http/headers.h"
+#include "source/common/runtime/runtime_features.h"
 #include "source/common/singleton/const_singleton.h"
+#include "source/common/stream_info/utility.h"
 
 #include "eval/public/cel_value.h"
 #include "eval/public/containers/container_backed_list_impl.h"
@@ -46,12 +48,14 @@ constexpr absl::string_view CodeDetails = "code_details";
 constexpr absl::string_view Trailers = "trailers";
 constexpr absl::string_view Flags = "flags";
 constexpr absl::string_view GrpcStatus = "grpc_status";
+constexpr absl::string_view BackendLatency = "backend_latency";
 
 // Per-request or per-connection metadata
 constexpr absl::string_view Metadata = "metadata";
 
 // Per-request or per-connection filter state
 constexpr absl::string_view FilterState = "filter_state";
+constexpr absl::string_view UpstreamFilterState = "upstream_filter_state";
 
 // Connection properties
 constexpr absl::string_view Connection = "connection";
@@ -66,6 +70,7 @@ constexpr absl::string_view URISanPeerCertificate = "uri_san_peer_certificate";
 constexpr absl::string_view DNSSanLocalCertificate = "dns_san_local_certificate";
 constexpr absl::string_view DNSSanPeerCertificate = "dns_san_peer_certificate";
 constexpr absl::string_view SHA256PeerCertificateDigest = "sha256_peer_certificate_digest";
+constexpr absl::string_view DownstreamTransportFailureReason = "transport_failure_reason";
 
 // Source properties
 constexpr absl::string_view Source = "source";
@@ -88,6 +93,9 @@ constexpr absl::string_view RouteName = "route_name";
 constexpr absl::string_view RouteMetadata = "route_metadata";
 constexpr absl::string_view UpstreamHostMetadata = "upstream_host_metadata";
 constexpr absl::string_view FilterChainName = "filter_chain_name";
+constexpr absl::string_view ListenerMetadata = "listener_metadata";
+constexpr absl::string_view ListenerDirection = "listener_direction";
+constexpr absl::string_view Node = "node";
 
 class WrapperFieldValues {
 public:
@@ -112,15 +120,23 @@ public:
       return {};
     }
     auto str = std::string(key.StringOrDie().value());
-    if (!::Envoy::Http::validHeaderString(str)) {
-      // Reject key if it is an invalid header string
-      return {};
+    if (Runtime::runtimeFeatureEnabled("envoy.reloadable_features.consistent_header_validation")) {
+      if (!Http::HeaderUtility::headerNameIsValid(str)) {
+        // Reject key if it is an invalid header string
+        return {};
+      }
+    } else {
+      if (!::Envoy::Http::validHeaderString(str)) {
+        // Reject key if it is an invalid header string
+        return {};
+      }
     }
     return convertHeaderEntry(arena_, ::Envoy::Http::HeaderUtility::getAllOfHeaderAsString(
                                           *value_, ::Envoy::Http::LowerCaseString(str)));
   }
   int size() const override { return ListKeys().value()->size(); }
   bool empty() const override { return value_ == nullptr ? true : value_->empty(); }
+  using CelMap::ListKeys;
   absl::StatusOr<const google::api::expr::runtime::CelList*> ListKeys() const override {
     if (value_ == nullptr) {
       return &WrapperFields::get().Empty;
@@ -154,6 +170,7 @@ class BaseWrapper : public google::api::expr::runtime::CelMap {
 public:
   BaseWrapper(Protobuf::Arena& arena) : arena_(arena) {}
   int size() const override { return 0; }
+  using CelMap::ListKeys;
   absl::StatusOr<const google::api::expr::runtime::CelList*> ListKeys() const override {
     return absl::UnimplementedError("ListKeys() is not implemented");
   }
@@ -231,12 +248,14 @@ private:
 
 class XDSWrapper : public BaseWrapper {
 public:
-  XDSWrapper(Protobuf::Arena& arena, const StreamInfo::StreamInfo& info)
-      : BaseWrapper(arena), info_(info) {}
+  XDSWrapper(Protobuf::Arena& arena, const StreamInfo::StreamInfo* info,
+             const LocalInfo::LocalInfo* local_info)
+      : BaseWrapper(arena), info_(info), local_info_(local_info) {}
   absl::optional<CelValue> operator[](CelValue key) const override;
 
 private:
-  const StreamInfo::StreamInfo& info_;
+  const StreamInfo::StreamInfo* info_;
+  const LocalInfo::LocalInfo* local_info_;
 };
 
 } // namespace Expr

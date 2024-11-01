@@ -28,12 +28,12 @@
 #include "source/common/http/conn_manager_utility.h"
 #include "source/common/http/header_map_impl.h"
 #include "source/common/http/headers.h"
+#include "source/common/listener_manager/listener_impl.h"
 #include "source/common/memory/utils.h"
 #include "source/common/network/listen_socket_impl.h"
 #include "source/common/protobuf/protobuf.h"
 #include "source/common/protobuf/utility.h"
 #include "source/common/router/config_impl.h"
-#include "source/extensions/listener_managers/listener_manager/listener_impl.h"
 #include "source/extensions/request_id/uuid/config.h"
 #include "source/server/admin/utils.h"
 
@@ -50,27 +50,25 @@ ConfigTracker& AdminImpl::getConfigTracker() { return config_tracker_; }
 AdminImpl::NullRouteConfigProvider::NullRouteConfigProvider(TimeSource& time_source)
     : config_(new Router::NullConfigImpl()), time_source_(time_source) {}
 
-void AdminImpl::startHttpListener(const std::list<AccessLog::InstanceSharedPtr>& access_logs,
-                                  const std::string& address_out_path,
+void AdminImpl::startHttpListener(std::list<AccessLog::InstanceSharedPtr> access_logs,
                                   Network::Address::InstanceConstSharedPtr address,
-                                  const Network::Socket::OptionsSharedPtr& socket_options,
-                                  Stats::ScopeSharedPtr&& listener_scope) {
-  for (const auto& access_log : access_logs) {
-    access_logs_.emplace_back(access_log);
-  }
-  null_overload_manager_.start();
+                                  Network::Socket::OptionsSharedPtr socket_options) {
+  access_logs_ = std::move(access_logs);
+
   socket_ = std::make_shared<Network::TcpListenSocket>(address, socket_options, true);
   RELEASE_ASSERT(0 == socket_->ioHandle().listen(ENVOY_TCP_BACKLOG_SIZE).return_value_,
                  "listen() failed on admin listener");
   socket_factories_.emplace_back(std::make_unique<AdminListenSocketFactory>(socket_));
-  listener_ = std::make_unique<AdminListener>(*this, std::move(listener_scope));
+  listener_ = std::make_unique<AdminListener>(*this, factory_context_.listenerScope());
+
   ENVOY_LOG(info, "admin address: {}",
             socket().connectionInfoProvider().localAddress()->asString());
-  if (!address_out_path.empty()) {
-    std::ofstream address_out_file(address_out_path);
+
+  if (!server_.options().adminAddressPath().empty()) {
+    std::ofstream address_out_file(server_.options().adminAddressPath());
     if (!address_out_file) {
       ENVOY_LOG(critical, "cannot open admin address output file {} for writing.",
-                address_out_path);
+                server_.options().adminAddressPath());
     } else {
       address_out_file << socket_->connectionInfoProvider().localAddress()->asString();
     }
@@ -109,12 +107,13 @@ Http::HeaderValidatorFactoryPtr createHeaderValidatorFactory(
 
 AdminImpl::AdminImpl(const std::string& profile_path, Server::Instance& server,
                      bool ignore_global_conn_limit)
-    : server_(server),
+    : server_(server), listener_info_(std::make_shared<ListenerInfoImpl>()),
+      factory_context_(server, listener_info_),
       request_id_extension_(Extensions::RequestId::UUIDRequestIDExtension::defaultInstance(
           server_.api().randomGenerator())),
       profile_path_(profile_path), stats_(Http::ConnectionManagerImpl::generateStats(
                                        "http.admin.", *server_.stats().rootScope())),
-      null_overload_manager_(server_.threadLocal()),
+      null_overload_manager_(server.threadLocal(), false),
       tracing_stats_(Http::ConnectionManagerImpl::generateTracingStats("http.admin.",
                                                                        *no_op_store_.rootScope())),
       route_config_provider_(server.timeSource()),
@@ -167,6 +166,13 @@ AdminImpl::AdminImpl(const std::string& profile_path, Server::Instance& server,
           makeHandler("/heap_dump", "dump current Envoy heap (if supported)",
                       MAKE_ADMIN_HANDLER(tcmalloc_profiling_handler_.handlerHeapDump), false,
                       false),
+          makeHandler("/allocprofiler", "enable/disable the allocation profiler (if supported)",
+                      MAKE_ADMIN_HANDLER(tcmalloc_profiling_handler_.handlerAllocationProfiler),
+                      false, true,
+                      {{Admin::ParamDescriptor::Type::Enum,
+                        "enable",
+                        "enable/disable the allocation profiler",
+                        {"y", "n"}}}),
           makeHandler("/healthcheck/fail", "cause the server to fail health checks",
                       MAKE_ADMIN_HANDLER(server_cmd_handler_.handlerHealthcheckFail), false, true),
           makeHandler("/healthcheck/ok", "cause the server to pass health checks",
@@ -185,8 +191,12 @@ AdminImpl::AdminImpl(const std::string& profile_path, Server::Instance& server,
                       MAKE_ADMIN_HANDLER(logs_handler_.handlerLogging), false, true,
                       {{Admin::ParamDescriptor::Type::String, "paths",
                         "Change multiple logging levels by setting to "
-                        "<logger_name1>:<desired_level1>,<logger_name2>:<desired_level2>."},
-                       {Admin::ParamDescriptor::Type::Enum, "level", "desired logging level",
+                        "<logger_name1>:<desired_level1>,<logger_name2>:<desired_level2>. "
+                        "If fine grain logging is enabled, use __FILE__ or a glob experision as "
+                        "the logger name. "
+                        "For example, source/common*:warning"},
+                       {Admin::ParamDescriptor::Type::Enum, "level",
+                        "desired logging level, this will change all loggers's level",
                         prepend("", LogsHandler::levelStrings())}}),
           makeHandler("/memory", "print current allocation/heap usage",
                       MAKE_ADMIN_HANDLER(server_info_handler_.handlerMemory), false, false),
@@ -221,7 +231,11 @@ AdminImpl::AdminImpl(const std::string& profile_path, Server::Instance& server,
                         "Render text_readouts as new gaugues with value 0 (increases Prometheus "
                         "data size)"},
                        {ParamDescriptor::Type::String, "filter",
-                        "Regular expression (Google re2) for filtering stats"}}),
+                        "Regular expression (Google re2) for filtering stats"},
+                       {ParamDescriptor::Type::Enum,
+                        "histogram_buckets",
+                        "Histogram bucket display mode",
+                        {"cumulative", "summary"}}}),
           makeHandler("/stats/recentlookups", "Show recent stat-name lookups",
                       MAKE_ADMIN_HANDLER(stats_handler_.handlerStatsRecentLookups), false, false),
           makeHandler("/stats/recentlookups/clear", "clear list of stat-name lookups and counter",
@@ -273,7 +287,8 @@ Http::ServerConnectionPtr AdminImpl::createCodec(Network::Connection& connection
       connection, data, callbacks, *server_.stats().rootScope(), server_.api().randomGenerator(),
       http1_codec_stats_, http2_codec_stats_, Http::Http1Settings(),
       ::Envoy::Http2::Utility::initializeAndValidateOptions(
-          envoy::config::core::v3::Http2ProtocolOptions()),
+          envoy::config::core::v3::Http2ProtocolOptions())
+          .value(),
       maxRequestHeadersKb(), maxRequestHeadersCount(), headersWithUnderscoresAction(),
       overload_manager);
 }
@@ -283,16 +298,16 @@ bool AdminImpl::createNetworkFilterChain(Network::Connection& connection,
   // Pass in the null overload manager so that the admin interface is accessible even when Envoy
   // is overloaded.
   connection.addReadFilter(Network::ReadFilterSharedPtr{new Http::ConnectionManagerImpl(
-      *this, server_.drainManager(), server_.api().randomGenerator(), server_.httpContext(),
-      server_.runtime(), server_.localInfo(), server_.clusterManager(), null_overload_manager_,
-      server_.timeSource())});
+      shared_from_this(), server_.drainManager(), server_.api().randomGenerator(),
+      server_.httpContext(), server_.runtime(), server_.localInfo(), server_.clusterManager(),
+      server_.nullOverloadManager(), server_.timeSource())});
   return true;
 }
 
 bool AdminImpl::createFilterChain(Http::FilterChainManager& manager, bool,
                                   const Http::FilterChainOptions&) const {
   Http::FilterFactoryCb factory = [this](Http::FilterChainFactoryCallbacks& callbacks) {
-    callbacks.addStreamFilter(std::make_shared<AdminFilter>(createRequestFunction()));
+    callbacks.addStreamFilter(std::make_shared<AdminFilter>(*this));
   };
   manager.applyFilterFactoryCb({}, factory);
   return true;
@@ -493,7 +508,7 @@ bool AdminImpl::removeHandler(const std::string& prefix) {
 
 Http::Code AdminImpl::request(absl::string_view path_and_query, absl::string_view method,
                               Http::ResponseHeaderMap& response_headers, std::string& body) {
-  AdminFilter filter(createRequestFunction());
+  AdminFilter filter(*this);
 
   auto request_headers = Http::RequestHeaderMapImpl::create();
   request_headers->setMethod(method);
@@ -515,7 +530,8 @@ void AdminImpl::closeSocket() {
 
 void AdminImpl::addListenerToHandler(Network::ConnectionHandler* handler) {
   if (listener_) {
-    handler->addListener(absl::nullopt, *listener_, server_.runtime());
+    handler->addListener(absl::nullopt, *listener_, server_.runtime(),
+                         server_.api().randomGenerator());
   }
 }
 

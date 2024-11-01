@@ -35,18 +35,20 @@ public:
   void initializeThreadLocalClusters(const std::vector<std::string>& cluster_names);
 
   // Upstream::ClusterManager
+  MOCK_METHOD(absl::Status, initialize, (const envoy::config::bootstrap::v3::Bootstrap& bootstrap));
+  MOCK_METHOD(bool, initialized, ());
   MOCK_METHOD(bool, addOrUpdateCluster,
-              (const envoy::config::cluster::v3::Cluster& cluster,
-               const std::string& version_info));
+              (const envoy::config::cluster::v3::Cluster& cluster, const std::string& version_info,
+               const bool avoid_cds_removal));
   MOCK_METHOD(void, setPrimaryClustersInitializedCb, (PrimaryClustersReadyCallback));
   MOCK_METHOD(void, setInitializedCb, (InitializationCompleteCallback));
-  MOCK_METHOD(void, initializeSecondaryClusters,
+  MOCK_METHOD(absl::Status, initializeSecondaryClusters,
               (const envoy::config::bootstrap::v3::Bootstrap& bootstrap));
   MOCK_METHOD(ClusterInfoMaps, clusters, (), (const));
 
   MOCK_METHOD(const ClusterSet&, primaryClusters, ());
   MOCK_METHOD(ThreadLocalCluster*, getThreadLocalCluster, (absl::string_view cluster));
-  MOCK_METHOD(bool, removeCluster, (const std::string& cluster));
+  MOCK_METHOD(bool, removeCluster, (const std::string& cluster, const bool remove_ignored));
   MOCK_METHOD(void, shutdown, ());
   MOCK_METHOD(bool, isShutdown, ());
   MOCK_METHOD(const absl::optional<envoy::config::core::v3::BindConfig>&, bindConfig, (), (const));
@@ -80,7 +82,7 @@ public:
   MOCK_METHOD(void, drainConnections,
               (const std::string& cluster, DrainConnectionsHostPredicate predicate));
   MOCK_METHOD(void, drainConnections, (DrainConnectionsHostPredicate predicate));
-  MOCK_METHOD(void, checkActiveStaticCluster, (const std::string& cluster));
+  MOCK_METHOD(absl::Status, checkActiveStaticCluster, (const std::string& cluster));
   MOCK_METHOD(OdCdsApiHandlePtr, allocateOdCdsApi,
               (const envoy::config::core::v3::ConfigSource& odcds_config,
                OptRef<xds::core::v3::ResourceLocator> odcds_resources_locator,
@@ -92,6 +94,8 @@ public:
   }
 
   MOCK_METHOD(Config::EdsResourcesCacheOptRef, edsResourcesCache, ());
+  MOCK_METHOD(void, createNetworkObserverRegistries,
+              (Quic::EnvoyQuicNetworkObserverRegistryFactory&));
 
   envoy::config::core::v3::BindConfig& mutableBindConfig();
 

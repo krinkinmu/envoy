@@ -85,7 +85,7 @@ class InstanceFactory {
 public:
   template <typename InstanceType, typename... Args>
   static StatusOr<InstanceConstSharedPtr> createInstancePtr(Args&&... args) {
-    absl::Status status;
+    absl::Status status = absl::OkStatus();
     // Use new instead of make_shared here because the instance constructors are private and must be
     // called directly here.
     std::shared_ptr<InstanceType> instance(new InstanceType(status, std::forward<Args>(args)...));
@@ -233,6 +233,13 @@ public:
   socklen_t sockAddrLen() const override { return sizeof(sockaddr_in6); }
   absl::string_view addressType() const override { return "default"; }
 
+  /**
+   * Convenience function to convert an IPv6 address to canonical string format.
+   * @param addr address to format.
+   * @return the address in dotted-decimal string format.
+   */
+  static std::string sockaddrToString(const sockaddr_in6& addr);
+
   // Validate that IPv6 is supported on this platform
   static absl::Status validateProtocolSupported();
 
@@ -262,6 +269,7 @@ private:
     InstanceConstSharedPtr addressWithoutScopeId() const override;
 
     std::string makeFriendlyAddress() const;
+    static std::string makeFriendlyAddress(const sockaddr_in6& address);
 
     sockaddr_in6 address_;
     // Is IPv4 compatibility (https://tools.ietf.org/html/rfc3493#page-11) disabled?
@@ -301,14 +309,16 @@ public:
   /**
    * Construct from an existing unix address.
    */
-  explicit PipeInstance(const sockaddr_un* address, socklen_t ss_len, mode_t mode = 0,
-                        const SocketInterface* sock_interface = nullptr);
+  static absl::StatusOr<std::unique_ptr<PipeInstance>>
+  create(const sockaddr_un* address, socklen_t ss_len, mode_t mode = 0,
+         const SocketInterface* sock_interface = nullptr);
 
   /**
    * Construct from a string pipe path.
    */
-  explicit PipeInstance(const std::string& pipe_path, mode_t mode = 0,
-                        const SocketInterface* sock_interface = nullptr);
+  static absl::StatusOr<std::unique_ptr<PipeInstance>>
+  create(const std::string& pipe_path, mode_t mode = 0,
+         const SocketInterface* sock_interface = nullptr);
 
   static absl::Status validateProtocolSupported() { return absl::OkStatus(); }
 
@@ -330,6 +340,8 @@ public:
   absl::string_view addressType() const override { return "default"; }
 
 private:
+  explicit PipeInstance(const std::string& pipe_path, mode_t mode,
+                        const SocketInterface* sock_interface, absl::Status& creation_status);
   /**
    * Construct from an existing unix address.
    * Store the error status code in passed in parameter instead of throwing.

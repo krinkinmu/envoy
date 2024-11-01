@@ -1,6 +1,6 @@
 # DO NOT LOAD THIS FILE. Targets from this file should be considered private
 # and not used outside of the @envoy//bazel package.
-load(":envoy_select.bzl", "envoy_select_admin_html", "envoy_select_disable_exceptions", "envoy_select_disable_logging", "envoy_select_google_grpc", "envoy_select_hot_restart", "envoy_select_signal_trace", "envoy_select_static_extension_registration")
+load(":envoy_select.bzl", "envoy_select_admin_html", "envoy_select_disable_exceptions", "envoy_select_disable_logging", "envoy_select_google_grpc", "envoy_select_hot_restart", "envoy_select_nghttp2", "envoy_select_signal_trace", "envoy_select_static_extension_registration")
 
 # Compute the final copts based on various options.
 def envoy_copts(repository, test = False):
@@ -119,11 +119,13 @@ def envoy_copts(repository, test = False):
                repository + "//bazel:uhv_enabled": ["-DENVOY_ENABLE_UHV"],
                "//conditions:default": [],
            }) + envoy_select_hot_restart(["-DENVOY_HOT_RESTART"], repository) + \
-           envoy_select_disable_exceptions(["-fno-unwind-tables", "-fno-exceptions"], repository) + \
+           envoy_select_nghttp2(["-DENVOY_NGHTTP2"], repository) + \
+           envoy_select_disable_exceptions(["-fno-exceptions"], repository) + \
            envoy_select_admin_html(["-DENVOY_ADMIN_HTML"], repository) + \
            envoy_select_static_extension_registration(["-DENVOY_STATIC_EXTENSION_REGISTRATION"], repository) + \
            envoy_select_disable_logging(["-DENVOY_DISABLE_LOGGING"], repository) + \
            _envoy_select_perf_annotation(["-DENVOY_PERF_ANNOTATION"]) + \
+           _envoy_select_execution_context() + \
            _envoy_select_perfetto(["-DENVOY_PERFETTO"]) + \
            envoy_select_google_grpc(["-DENVOY_GOOGLE_GRPC"], repository) + \
            envoy_select_signal_trace(["-DENVOY_HANDLE_SIGNALS"], repository) + \
@@ -149,9 +151,6 @@ def envoy_select_force_libcpp(if_libcpp, default = None):
 
 def envoy_stdlib_deps():
     return select({
-        "@envoy//bazel:asan_build": ["@envoy//bazel:dynamic_stdlib"],
-        "@envoy//bazel:msan_build": ["@envoy//bazel:dynamic_stdlib"],
-        "@envoy//bazel:tsan_build": ["@envoy//bazel:dynamic_stdlib"],
         "//conditions:default": ["@envoy//bazel:static_stdlib"],
     })
 
@@ -168,15 +167,15 @@ def tcmalloc_external_dep(repository):
         repository + "//bazel:disable_tcmalloc": None,
         repository + "//bazel:disable_tcmalloc_on_linux_x86_64": None,
         repository + "//bazel:disable_tcmalloc_on_linux_aarch64": None,
-        repository + "//bazel:debug_tcmalloc": envoy_external_dep_path("gperftools"),
-        repository + "//bazel:debug_tcmalloc_on_linux_x86_64": envoy_external_dep_path("gperftools"),
-        repository + "//bazel:debug_tcmalloc_on_linux_aarch64": envoy_external_dep_path("gperftools"),
-        repository + "//bazel:gperftools_tcmalloc": envoy_external_dep_path("gperftools"),
-        repository + "//bazel:gperftools_tcmalloc_on_linux_x86_64": envoy_external_dep_path("gperftools"),
-        repository + "//bazel:gperftools_tcmalloc_on_linux_aarch64": envoy_external_dep_path("gperftools"),
-        repository + "//bazel:linux_x86_64": envoy_external_dep_path("tcmalloc"),
-        repository + "//bazel:linux_aarch64": envoy_external_dep_path("tcmalloc"),
-        "//conditions:default": envoy_external_dep_path("gperftools"),
+        repository + "//bazel:debug_tcmalloc": repository + "//bazel/foreign_cc:gperftools",
+        repository + "//bazel:debug_tcmalloc_on_linux_x86_64": repository + "//bazel/foreign_cc:gperftools",
+        repository + "//bazel:debug_tcmalloc_on_linux_aarch64": repository + "//bazel/foreign_cc:gperftools",
+        repository + "//bazel:gperftools_tcmalloc": repository + "//bazel/foreign_cc:gperftools",
+        repository + "//bazel:gperftools_tcmalloc_on_linux_x86_64": repository + "//bazel/foreign_cc:gperftools",
+        repository + "//bazel:gperftools_tcmalloc_on_linux_aarch64": repository + "//bazel/foreign_cc:gperftools",
+        repository + "//bazel:linux_x86_64": "@com_github_google_tcmalloc//tcmalloc",
+        repository + "//bazel:linux_aarch64": "@com_github_google_tcmalloc//tcmalloc",
+        "//conditions:default": repository + "//bazel/foreign_cc:gperftools",
     })
 
 # Select the given values if default path normalization is on in the current build.
@@ -189,6 +188,12 @@ def _envoy_select_path_normalization_by_default(xs, repository = ""):
 def _envoy_select_perf_annotation(xs):
     return select({
         "@envoy//bazel:enable_perf_annotation": xs,
+        "//conditions:default": [],
+    })
+
+def _envoy_select_execution_context():
+    return select({
+        "@envoy//bazel:enable_execution_context": ["-DENVOY_ENABLE_EXECUTION_CONTEXT"],
         "//conditions:default": [],
     })
 

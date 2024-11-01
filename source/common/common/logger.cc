@@ -158,7 +158,19 @@ void DelegatingLogSink::setTlsDelegate(SinkDelegate* sink) { *tlsSink() = sink; 
 
 SinkDelegate* DelegatingLogSink::tlsDelegate() { return *tlsSink(); }
 
-static Context* current_context = nullptr;
+void DelegatingLogSink::logWithStableName(absl::string_view stable_name, absl::string_view level,
+                                          absl::string_view component, absl::string_view message) {
+  auto tls_sink = tlsDelegate();
+  if (tls_sink != nullptr) {
+    tls_sink->logWithStableName(stable_name, level, component, message);
+    return;
+  }
+  absl::ReaderMutexLock sink_lock(&sink_mutex_);
+  sink_->logWithStableName(stable_name, level, component, message);
+}
+
+static std::atomic<Context*> current_context = nullptr;
+static_assert(std::atomic<Context*>::is_always_lock_free);
 
 Context::Context(spdlog::level::level_enum log_level, const std::string& log_format,
                  Thread::BasicLockable& lock, bool should_escape, bool enable_fine_grain_logging)
@@ -171,7 +183,7 @@ Context::Context(spdlog::level::level_enum log_level, const std::string& log_for
 Context::~Context() {
   current_context = save_context_;
   if (current_context != nullptr) {
-    current_context->activate();
+    current_context.load()->activate();
   } else {
     Registry::getSink()->clearLock();
   }
@@ -197,7 +209,7 @@ void Context::activate() {
 
 bool Context::useFineGrainLogger() {
   if (current_context) {
-    return current_context->enable_fine_grain_logging_;
+    return current_context.load()->enable_fine_grain_logging_;
   }
   return false;
 }
@@ -219,20 +231,21 @@ void Context::changeAllLogLevels(spdlog::level::level_enum level) {
 
 void Context::enableFineGrainLogger() {
   if (current_context) {
-    current_context->enable_fine_grain_logging_ = true;
-    current_context->fine_grain_default_level_ = current_context->log_level_;
-    current_context->fine_grain_log_format_ = current_context->log_format_;
-    if (current_context->log_format_ == Logger::Logger::DEFAULT_LOG_FORMAT) {
-      current_context->fine_grain_log_format_ = kDefaultFineGrainLogFormat;
+    current_context.load()->enable_fine_grain_logging_ = true;
+    current_context.load()->fine_grain_default_level_ = current_context.load()->log_level_;
+    current_context.load()->fine_grain_log_format_ = current_context.load()->log_format_;
+    if (current_context.load()->log_format_ == Logger::Logger::DEFAULT_LOG_FORMAT) {
+      current_context.load()->fine_grain_log_format_ = kDefaultFineGrainLogFormat;
     }
     getFineGrainLogContext().setDefaultFineGrainLogLevelFormat(
-        current_context->fine_grain_default_level_, current_context->fine_grain_log_format_);
+        current_context.load()->fine_grain_default_level_,
+        current_context.load()->fine_grain_log_format_);
   }
 }
 
 void Context::disableFineGrainLogger() {
   if (current_context) {
-    current_context->enable_fine_grain_logging_ = false;
+    current_context.load()->enable_fine_grain_logging_ = false;
   }
 }
 
@@ -240,14 +253,14 @@ std::string Context::getFineGrainLogFormat() {
   if (!current_context) { // Context is not instantiated in benchmark test
     return kDefaultFineGrainLogFormat;
   }
-  return current_context->fine_grain_log_format_;
+  return current_context.load()->fine_grain_log_format_;
 }
 
 spdlog::level::level_enum Context::getFineGrainDefaultLevel() {
   if (!current_context) {
     return spdlog::level::info;
   }
-  return current_context->fine_grain_default_level_;
+  return current_context.load()->fine_grain_default_level_;
 }
 
 std::vector<Logger>& Registry::allLoggers() {
@@ -279,7 +292,7 @@ absl::Status Registry::setJsonLogFormat(const Protobuf::Message& log_format_stru
 #else
   Protobuf::util::JsonPrintOptions json_options;
   json_options.preserve_proto_field_names = true;
-  json_options.always_print_primitive_fields = true;
+  json_options.always_print_fields_with_no_presence = true;
 
   std::string format_as_json;
   const auto status =

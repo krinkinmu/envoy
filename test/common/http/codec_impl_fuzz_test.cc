@@ -28,7 +28,7 @@
 
 #include "gmock/gmock.h"
 
-#include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/common/platform/api/quiche_test.h"
 
 using testing::_;
 using testing::Invoke;
@@ -79,7 +79,8 @@ envoy::config::core::v3::Http2ProtocolOptions
 fromHttp2Settings(const test::common::http::Http2Settings& settings) {
   envoy::config::core::v3::Http2ProtocolOptions options(
       ::Envoy::Http2::Utility::initializeAndValidateOptions(
-          envoy::config::core::v3::Http2ProtocolOptions()));
+          envoy::config::core::v3::Http2ProtocolOptions())
+          .value());
   // We apply an offset and modulo interpretation to settings to ensure that
   // they are valid. Rejecting invalid settings is orthogonal to the fuzzed
   // code.
@@ -377,21 +378,23 @@ public:
           dispatcher = &context_.client_connection_.dispatcher_;
         }
 
-        // With this feature enabled for http2 we end up creating a schedulable
-        // callback the first time we re-enable reading as it's used to process
-        // the backed up data.
-        if (Runtime::runtimeFeatureEnabled(Runtime::defer_processing_backedup_streams)) {
-          const bool expecting_schedulable_callback_creation =
-              http_protocol_ == Protocol::Http2 && state.read_disable_count_ == 0 && !disable &&
-              !state.created_schedulable_callback_;
+        // As part of deferred processing for http2 the codec may end up creating a
+        // schedulable callback the first time it re-enables reading as it's used
+        // to process the backed up data if there's any to process.
+        const bool might_schedulable_callback_creation =
+            http_protocol_ == Protocol::Http2 && state.read_disable_count_ == 0 && !disable &&
+            !state.created_schedulable_callback_;
 
-          if (expecting_schedulable_callback_creation) {
-            ASSERT(dispatcher != nullptr);
-            state.created_schedulable_callback_ = true;
-            // The unique pointer of this object will be returned in createSchedulableCallback_ of
-            // dispatcher, so there is no risk of object leak.
-            new Event::MockSchedulableCallback(dispatcher);
-          }
+        if (might_schedulable_callback_creation) {
+          ASSERT(dispatcher != nullptr);
+          state.created_schedulable_callback_ = true;
+          ON_CALL(*dispatcher, createSchedulableCallback_(_))
+              .WillByDefault(testing::Invoke([dispatcher](std::function<void()> cb) {
+                // The unique pointer of this object will be returned in
+                // createSchedulableCallback_ of dispatcher, so there is no risk of this object
+                // leaking.
+                return new Event::MockSchedulableCallback(dispatcher, cb);
+              }));
         }
 
         encoder->getStream().readDisable(disable);
@@ -611,7 +614,7 @@ void codecFuzz(const test::common::http::CodecImplFuzzTestCase& input, HttpVersi
   } else {
     client = std::make_unique<Http1::ClientConnectionImpl>(
         client_connection, Http1::CodecStats::atomicGet(http1_stats, scope), client_callbacks,
-        client_http1settings, max_response_headers_count);
+        client_http1settings, max_request_headers_kb, max_response_headers_count);
   }
 
   if (http2) {
@@ -828,7 +831,7 @@ DEFINE_PROTO_FUZZER(const test::common::http::CodecImplFuzzTestCase& input) {
     // inconsistent state (and crashes/accesses inconsistent memory), then it will be a bug we'll
     // need to further evaluate. However, in fuzzing we allow oghttp2 reaching FATAL states that may
     // happen in production environments.
-    quiche::setDFatalExitDisabled(true);
+    quiche::test::QuicheScopedDisableExitOnDFatal scoped_object;
     codecFuzzHttp2Oghttp2(input);
 #endif
   } catch (const EnvoyException& e) {

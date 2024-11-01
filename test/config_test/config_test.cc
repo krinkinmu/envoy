@@ -8,9 +8,9 @@
 
 #include "source/common/api/os_sys_calls_impl.h"
 #include "source/common/common/fmt.h"
+#include "source/common/listener_manager/listener_manager_impl.h"
 #include "source/common/protobuf/utility.h"
 #include "source/common/runtime/runtime_features.h"
-#include "source/extensions/listener_managers/listener_manager/listener_manager_impl.h"
 #include "source/server/config_validation/server.h"
 #include "source/server/configuration_impl.h"
 #include "source/server/options_impl.h"
@@ -40,12 +40,15 @@ namespace ConfigTest {
 namespace {
 
 // asConfigYaml returns a new config that empties the configPath() and populates configYaml()
-OptionsImpl asConfigYaml(const OptionsImpl& src, Api::Api& api) {
+OptionsImplBase asConfigYaml(const OptionsImplBase& src, Api::Api& api) {
   return Envoy::Server::createTestOptionsImpl(
       "", api.fileSystem().fileReadToEnd(src.configPath()).value(), src.localAddressIpVersion());
 }
 
 static std::vector<absl::string_view> unsuported_win32_configs = {
+#if defined(WIN32)
+    "rbac_envoy.yaml",
+#endif
 #if defined(WIN32) && !defined(SO_ORIGINAL_DST)
     "configs_original-dst-cluster_proxy_config.yaml"
 #endif
@@ -55,7 +58,8 @@ static std::vector<absl::string_view> unsuported_win32_configs = {
 
 class ConfigTest {
 public:
-  ConfigTest(OptionsImpl& options) : api_(Api::createApiForTest(time_system_)), options_(options) {
+  ConfigTest(OptionsImplBase& options)
+      : api_(Api::createApiForTest(time_system_)), options_(options) {
     ON_CALL(*server_.server_factory_context_, api()).WillByDefault(ReturnRef(server_.api_));
     ON_CALL(server_, options()).WillByDefault(ReturnRef(options_));
     ON_CALL(server_, sslContextManager()).WillByDefault(ReturnRef(ssl_context_manager_));
@@ -94,9 +98,13 @@ public:
         .Times(AtLeast(0));
 
     envoy::config::bootstrap::v3::Bootstrap bootstrap;
-    Server::InstanceUtil::loadBootstrapConfig(
-        bootstrap, options_, server_.messageValidationContext().staticValidationVisitor(), *api_);
-    Server::Configuration::InitialImpl initial_config(bootstrap);
+    EXPECT_TRUE(Server::InstanceUtil::loadBootstrapConfig(
+                    bootstrap, options_,
+                    server_.messageValidationContext().staticValidationVisitor(), *api_)
+                    .ok());
+    absl::Status creation_status;
+    Server::Configuration::InitialImpl initial_config(bootstrap, creation_status);
+    THROW_IF_NOT_OK_REF(creation_status);
     Server::Configuration::MainImpl main_config;
 
     // Emulate main implementation of initializing bootstrap extensions.
@@ -125,8 +133,7 @@ public:
     ON_CALL(component_factory_, createNetworkFilterFactoryList(_, _))
         .WillByDefault(Invoke(
             [&](const Protobuf::RepeatedPtrField<envoy::config::listener::v3::Filter>& filters,
-                Server::Configuration::FilterChainFactoryContext& context)
-                -> Filter::NetworkFilterFactoriesList {
+                Server::Configuration::FilterChainFactoryContext& context) {
               return Server::ProdListenerComponentFactory::createNetworkFilterFactoryListImpl(
                   filters, context, network_config_provider_manager_);
             }));
@@ -136,8 +143,7 @@ public:
         .WillByDefault(Invoke(
             [&](const Protobuf::RepeatedPtrField<envoy::config::listener::v3::ListenerFilter>&
                     filters,
-                Server::Configuration::ListenerFactoryContext& context)
-                -> Filter::ListenerFilterFactoriesList {
+                Server::Configuration::ListenerFactoryContext& context) {
               return Server::ProdListenerComponentFactory::createListenerFilterFactoryListImpl(
                   filters, context, *component_factory_.getTcpListenerConfigProviderManager());
             }));
@@ -145,15 +151,14 @@ public:
         .WillByDefault(Invoke(
             [&](const Protobuf::RepeatedPtrField<envoy::config::listener::v3::ListenerFilter>&
                     filters,
-                Server::Configuration::ListenerFactoryContext& context)
-                -> std::vector<Network::UdpListenerFilterFactoryCb> {
+                Server::Configuration::ListenerFactoryContext& context) {
               return Server::ProdListenerComponentFactory::createUdpListenerFilterFactoryListImpl(
                   filters, context);
             }));
     ON_CALL(server_, serverFactoryContext()).WillByDefault(ReturnRef(server_factory_context_));
 
     try {
-      main_config.initialize(bootstrap, server_, *cluster_manager_factory_);
+      THROW_IF_NOT_OK(main_config.initialize(bootstrap, server_, *cluster_manager_factory_));
     } catch (const EnvoyException& ex) {
       ADD_FAILURE() << fmt::format("'{}' config failed. Error: {}", options_.configPath(),
                                    ex.what());
@@ -167,7 +172,7 @@ public:
   NiceMock<Server::MockInstance> server_;
   Server::ServerFactoryContextImpl server_factory_context_{server_};
   NiceMock<Ssl::MockContextManager> ssl_context_manager_;
-  OptionsImpl& options_;
+  OptionsImplBase& options_;
   std::unique_ptr<Upstream::ProdClusterManagerFactory> cluster_manager_factory_;
   std::unique_ptr<NiceMock<Server::MockListenerComponentFactory>> component_factory_ptr_{
       std::make_unique<NiceMock<Server::MockListenerComponentFactory>>()};
@@ -205,19 +210,16 @@ void testMerge() {
             ]
           }
         })EOF";
-  OptionsImpl options(Server::createTestOptionsImpl("envoyproxy_io_proxy.yaml", overlay,
-                                                    Network::Address::IpVersion::v6));
+  OptionsImplBase options(Server::createTestOptionsImpl("envoyproxy_io_proxy.yaml", overlay,
+                                                        Network::Address::IpVersion::v6));
   envoy::config::bootstrap::v3::Bootstrap bootstrap;
-  Server::InstanceUtil::loadBootstrapConfig(bootstrap, options,
-                                            ProtobufMessage::getStrictValidationVisitor(), *api);
+  ASSERT_TRUE(Server::InstanceUtil::loadBootstrapConfig(
+                  bootstrap, options, ProtobufMessage::getStrictValidationVisitor(), *api)
+                  .ok());
   EXPECT_EQ(2, bootstrap.static_resources().clusters_size());
 }
 
 uint32_t run(const std::string& directory) {
-  // In the default startup process, we will inject regex engine before initializing config.
-  // While in the ConfigTest, these kind of bootstrap injections will not take place, so we must
-  // register regex engine in advance.
-  ScopedInjectableLoader<Regex::Engine> engine(std::make_unique<Regex::GoogleReEngine>());
   uint32_t num_tested = 0;
   Api::ApiPtr api = Api::createApiForTest();
   for (const std::string& filename : TestUtility::listFiles(directory, false)) {
@@ -234,14 +236,15 @@ uint32_t run(const std::string& directory) {
                      [filename](const absl::string_view& s) {
                        return filename.find(std::string(s)) != std::string::npos;
                      }) == unsuported_win32_configs.end()) {
-      OptionsImpl options(
+      OptionsImplBase options(
           Envoy::Server::createTestOptionsImpl(filename, "", Network::Address::IpVersion::v6));
       ConfigTest test1(options);
       envoy::config::bootstrap::v3::Bootstrap bootstrap;
-      Server::InstanceUtil::loadBootstrapConfig(
-          bootstrap, options, ProtobufMessage::getStrictValidationVisitor(), *api);
+      EXPECT_TRUE(Server::InstanceUtil::loadBootstrapConfig(
+                      bootstrap, options, ProtobufMessage::getStrictValidationVisitor(), *api)
+                      .ok());
       ENVOY_LOG_MISC(info, "testing {} as yaml.", filename);
-      OptionsImpl config = asConfigYaml(options, *api);
+      OptionsImplBase config = asConfigYaml(options, *api);
       ConfigTest test2(config);
     }
     num_tested++;

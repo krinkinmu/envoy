@@ -29,10 +29,13 @@ public:
     envoy::config::route::v3::RateLimit rate_limit;
     TestUtility::loadFromYaml(yaml, rate_limit);
     TestUtility::validate(rate_limit);
-    rate_limit_entry_ = std::make_unique<Router::RateLimitPolicyEntryImpl>(rate_limit, context_);
+    absl::Status creation_status;
+    rate_limit_entry_ =
+        std::make_unique<Router::RateLimitPolicyEntryImpl>(rate_limit, context_, creation_status);
+    THROW_IF_NOT_OK(creation_status);
   }
 
-  NiceMock<Server::Configuration::MockFactoryContext> context_;
+  NiceMock<Server::Configuration::MockServerFactoryContext> context_;
   std::unique_ptr<Router::RateLimitPolicyEntryImpl> rate_limit_entry_;
   Http::TestRequestHeaderMapImpl header_;
   std::vector<Envoy::RateLimit::Descriptor> descriptors_;

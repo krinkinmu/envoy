@@ -175,15 +175,17 @@ message TcpProxy {
   // :ref:`TcpProxy.weighted_clusters <envoy_v3_api_field_extensions.filters.network.tcp_proxy.v3.TcpProxy.weighted_clusters>`.
   OnDemand on_demand = 14;
 
-  // Optional endpoint metadata match criteria. Only endpoints in the upstream
-  // cluster with metadata matching that set in metadata_match will be
-  // considered. The filter name should be specified as ``envoy.lb``.
+  // Optional endpoint metadata match criteria used by the subset load balancer. Only endpoints
+  // in the upstream cluster with metadata matching what is set in this field will be considered
+  // for load balancing. The filter name should be specified as ``envoy.lb``.
   config.core.v3.Metadata metadata_match = 9;
 
   // The idle timeout for connections managed by the TCP proxy filter. The idle timeout
   // is defined as the period in which there are no bytes sent or received on either
   // the upstream or downstream connection. If not set, the default idle timeout is 1 hour. If set
   // to 0s, the timeout will be disabled.
+  // It is possible to dynamically override this configuration by setting a per-connection filter
+  // state object for the key ``envoy.tcp_proxy.per_connection_idle_timeout_ms``.
   //
   // .. warning::
   //   Disabling this timeout has a highly likelihood of yielding connection leaks due to lost TCP

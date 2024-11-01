@@ -25,7 +25,17 @@ uncomment.sh "$1" --comment -h \
   --uncomment-typedef SSL_PRIVATE_KEY_METHOD \
   --uncomment-typedef ossl_ssize_t \
   --uncomment-typedef CBS_ASN1_TAG \
+  --uncomment-typedef-redef ASN1_BIT_STRING \
+  --uncomment-typedef-redef ASN1_PRINTABLESTRING \
+  --uncomment-typedef-redef ASN1_GENERALSTRING \
+  --uncomment-typedef-redef ASN1_VISIBLESTRING \
+  --uncomment-typedef-redef ASN1_UTF8STRING \
+  --uncomment-typedef-redef ASN1_T61STRING \
+  --uncomment-typedef-redef ASN1_ENUMERATED \
+  --uncomment-typedef-redef ASN1_GENERALIZEDTIME \
+  --uncomment-typedef-redef ASN1_TYPE \
   --uncomment-typedef-redef ASN1_TIME \
+  --uncomment-typedef-redef ASN1_UTCTIME \
   --uncomment-typedef-redef ASN1_ITEM \
   --uncomment-typedef-redef ASN1_OBJECT \
   --uncomment-typedef-redef ASN1_IA5STRING \
@@ -46,8 +56,10 @@ uncomment.sh "$1" --comment -h \
   --uncomment-typedef-redef BUF_MEM \
   --uncomment-typedef-redef BIO \
   --uncomment-typedef-redef BN_GENCB \
+  --uncomment-typedef-redef BN_CTX \
   --uncomment-typedef-redef EC_GROUP \
   --uncomment-typedef-redef EC_KEY \
+  --uncomment-typedef-redef EC_POINT \
   --uncomment-typedef-redef ENGINE \
   --uncomment-typedef-redef EVP_MD_CTX --sed 's/ossl_env_md_ctx_st/ossl_evp_md_ctx_st/' \
   --uncomment-typedef-redef EVP_MD --sed 's/ossl_env_md_st/ossl_evp_md_st/' \

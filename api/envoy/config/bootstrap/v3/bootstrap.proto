@@ -41,7 +41,7 @@ option (udpa.annotations.file_status).package_version_status = ACTIVE;
 // <config_overview_bootstrap>` for more detail.
 
 // Bootstrap :ref:`configuration overview <config_overview_bootstrap>`.
-// [#next-free-field: 40]
+// [#next-free-field: 42]
 message Bootstrap {
   option (udpa.annotations.versioning).previous_message_type =
       "envoy.config.bootstrap.v2.Bootstrap";
@@ -134,6 +134,13 @@ message Bootstrap {
     // - Cluster traffic stats: a subgroup of the :ref:`cluster statistics <config_cluster_manager_cluster_stats>`
     // that are used when requests are routed to the cluster.
     bool enable_deferred_creation_stats = 1;
+  }
+
+  message GrpcAsyncClientManagerConfig {
+    // Optional field to set the expiration time for the cached gRPC client object.
+    // The minimal value is 5s and the default is 50s.
+    google.protobuf.Duration max_cached_entry_idle_duration = 1
+        [(validate.rules).duration = {gte {seconds: 5}}];
   }
 
   reserved 10, 11;
@@ -401,6 +408,13 @@ message Bootstrap {
 
   // Optional application log configuration.
   ApplicationLogConfig application_log_config = 38;
+
+  // Optional gRPC async manager config.
+  GrpcAsyncClientManagerConfig grpc_async_client_manager_config = 40;
+
+  // Optional configuration for memory allocation manager.
+  // Memory releasing is only supported for `tcmalloc allocator <https://github.com/google/tcmalloc>`_.
+  MemoryAllocatorManager memory_allocator_manager = 41;
 }
 
 // Administration interface :ref:`operations documentation
@@ -723,4 +737,15 @@ message CustomInlineHeader {
 
   // The type of the header that is expected to be set as the inline header.
   InlineHeaderType inline_header_type = 2 [(validate.rules).enum = {defined_only: true}];
+}
+
+message MemoryAllocatorManager {
+  // Configures tcmalloc to perform background release of free memory in amount of bytes per ``memory_release_interval`` interval.
+  // If equals to ``0``, no memory release will occur. Defaults to ``0``.
+  uint64 bytes_to_release = 1;
+
+  // Interval in milliseconds for memory releasing. If specified, during every
+  // interval Envoy will try to release ``bytes_to_release`` of free memory back to operating system for reuse.
+  // Defaults to 1000 milliseconds.
+  google.protobuf.Duration memory_release_interval = 2;
 }

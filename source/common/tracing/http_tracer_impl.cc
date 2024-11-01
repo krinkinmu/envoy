@@ -12,6 +12,7 @@
 #include "source/common/common/fmt.h"
 #include "source/common/common/macros.h"
 #include "source/common/common/utility.h"
+#include "source/common/formatter/substitution_format_utility.h"
 #include "source/common/grpc/common.h"
 #include "source/common/http/codes.h"
 #include "source/common/http/header_map_impl.h"
@@ -239,7 +240,10 @@ void HttpTracerUtility::setCommonTags(Span& span, const StreamInfo::StreamInfo& 
     span.setTag(Tracing::Tags::get().Error, Tracing::Tags::get().True);
   }
 
-  CustomTagContext ctx{stream_info.getRequestHeaders(), stream_info};
+  ReadOnlyHttpTraceContext trace_context{stream_info.getRequestHeaders() != nullptr
+                                             ? *stream_info.getRequestHeaders()
+                                             : *Http::StaticEmptyHeaders::get().request_headers};
+  CustomTagContext ctx{trace_context, stream_info};
   if (const CustomTagMap* custom_tag_map = tracing_config.customTags(); custom_tag_map) {
     for (const auto& it : *custom_tag_map) {
       it.second->applySpan(span, ctx);

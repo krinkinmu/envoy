@@ -130,11 +130,8 @@ void StreamEncoderImpl::encodeFormattedHeader(absl::string_view key, absl::strin
 void ResponseEncoderImpl::encode1xxHeaders(const ResponseHeaderMap& headers) {
   ASSERT(HeaderUtility::isSpecial1xx(headers));
   encodeHeaders(headers, false);
-  if (Runtime::runtimeFeatureEnabled(
-          "envoy.reloadable_features.http1_allow_codec_error_response_after_1xx_headers")) {
-    // Don't consider 100-continue responses as the actual response.
-    started_response_ = false;
-  }
+  // Don't consider 100-continue responses as the actual response.
+  started_response_ = false;
 }
 
 void StreamEncoderImpl::encodeHeadersBase(const RequestOrResponseHeaderMap& headers,
@@ -978,6 +975,10 @@ void ConnectionImpl::onResetStreamBase(StreamResetReason reason) {
   onResetStream(reason);
 }
 
+OptRef<const StreamInfo::StreamInfo> ConnectionImpl::trackedStream() const {
+  return connection_.trackedStream();
+}
+
 void ConnectionImpl::dumpState(std::ostream& os, int indent_level) const {
   const char* spaces = spacesForLevel(indent_level);
   os << spaces << "Http1::ConnectionImpl " << this << DUMP_MEMBER(dispatching_)
@@ -1069,8 +1070,8 @@ ServerConnectionImpl::ServerConnectionImpl(
           [&]() -> void { this->onAboveHighWatermark(); },
           []() -> void { /* TODO(adisuissa): handle overflow watermark */ })),
       headers_with_underscores_action_(headers_with_underscores_action),
-      abort_dispatch_(
-          overload_manager.getLoadShedPoint("envoy.load_shed_points.http1_server_abort_dispatch")) {
+      abort_dispatch_(overload_manager.getLoadShedPoint(
+          Server::LoadShedPointName::get().H1ServerAbortDispatch)) {
   ENVOY_LOG_ONCE_IF(trace, abort_dispatch_ == nullptr,
                     "LoadShedPoint envoy.load_shed_points.http1_server_abort_dispatch is not "
                     "found. Is it configured?");
@@ -1140,12 +1141,7 @@ Status ServerConnectionImpl::handlePath(RequestHeaderMap& headers, absl::string_
   // Add the scheme and validate to ensure no https://
   // requests are accepted over unencrypted connections by front-line Envoys.
   if (!is_connect) {
-    if (Runtime::runtimeFeatureEnabled(
-            "envoy.reloadable_features.allow_absolute_url_with_mixed_scheme")) {
-      headers.setScheme(absl::AsciiStrToLower(absolute_url.scheme()));
-    } else {
-      headers.setScheme(absolute_url.scheme());
-    }
+    headers.setScheme(absl::AsciiStrToLower(absolute_url.scheme()));
     if (!Utility::schemeIsValid(headers.getSchemeValue())) {
       RETURN_IF_ERROR(sendProtocolError(Http1ResponseCodeDetails::get().InvalidScheme));
       return codecProtocolError("http/1.1 protocol error: invalid scheme");
@@ -1344,7 +1340,7 @@ CallbackResult ServerConnectionImpl::onMessageCompleteBase() {
 
 void ServerConnectionImpl::onResetStream(StreamResetReason reason) {
   if (active_request_) {
-    active_request_->response_encoder_.runResetCallbacks(reason);
+    active_request_->response_encoder_.runResetCallbacks(reason, absl::string_view());
     connection_.dispatcher().deferredDelete(std::move(active_request_));
   }
 }
@@ -1431,15 +1427,19 @@ void ServerConnectionImpl::ActiveRequest::dumpState(std::ostream& os, int indent
 
 ClientConnectionImpl::ClientConnectionImpl(Network::Connection& connection, CodecStats& stats,
                                            ConnectionCallbacks&, const Http1Settings& settings,
+                                           absl::optional<uint16_t> max_response_headers_kb,
                                            const uint32_t max_response_headers_count,
                                            bool passing_through_proxy)
-    : ConnectionImpl(connection, stats, settings, MessageType::Response, MAX_RESPONSE_HEADERS_KB,
+    : ConnectionImpl(connection, stats, settings, MessageType::Response,
+                     max_response_headers_kb.value_or(MAX_RESPONSE_HEADERS_KB),
                      max_response_headers_count),
       owned_output_buffer_(connection.dispatcher().getWatermarkFactory().createBuffer(
           [&]() -> void { this->onBelowLowWatermark(); },
           [&]() -> void { this->onAboveHighWatermark(); },
           []() -> void { /* TODO(adisuissa): handle overflow watermark */ })),
-      passing_through_proxy_(passing_through_proxy) {
+      passing_through_proxy_(passing_through_proxy),
+      force_reset_on_premature_upstream_half_close_(Runtime::runtimeFeatureEnabled(
+          "envoy.reloadable_features.allow_multiplexed_upstream_half_close")) {
   owned_output_buffer_->setWatermarks(connection.bufferLimit());
   // Inform parent
   output_buffer_ = owned_output_buffer_.get();
@@ -1590,6 +1590,16 @@ CallbackResult ClientConnectionImpl::onMessageCompleteBase() {
       response.decoder_->decodeData(buffer, true);
     }
 
+    if (force_reset_on_premature_upstream_half_close_ && !encode_complete_) {
+      // H/1 connections are always reset if upstream is done before downstream.
+      // When the allow_multiplexed_upstream_half_close is enabled the router filter does not
+      // reset streams where upstream half closed before downstream. In this case the H/1 codec
+      // has to reset the stream.
+      ENVOY_CONN_LOG(trace, "Resetting stream due to premature H/1 upstream close.", connection_);
+      response.encoder_.runResetCallbacks(StreamResetReason::Http1PrematureUpstreamHalfClose,
+                                          absl::string_view());
+    }
+
     // Reset to ensure no information from one requests persists to the next.
     pending_response_.reset();
     headers_or_trailers_.emplace<ResponseHeaderMapPtr>(nullptr);
@@ -1602,7 +1612,7 @@ CallbackResult ClientConnectionImpl::onMessageCompleteBase() {
 void ClientConnectionImpl::onResetStream(StreamResetReason reason) {
   // Only raise reset if we did not already dispatch a complete response.
   if (pending_response_.has_value() && !pending_response_done_) {
-    pending_response_.value().encoder_.runResetCallbacks(reason);
+    pending_response_.value().encoder_.runResetCallbacks(reason, absl::string_view());
     pending_response_done_ = true;
     pending_response_.reset();
   }

@@ -83,6 +83,7 @@ namespace Http {
   GAUGE(downstream_cx_ssl_active, Accumulate)                                                      \
   GAUGE(downstream_cx_tx_bytes_buffered, Accumulate)                                               \
   GAUGE(downstream_cx_upgrades_active, Accumulate)                                                 \
+  GAUGE(downstream_cx_http1_soft_drain, Accumulate)                                                \
   GAUGE(downstream_rq_active, Accumulate)                                                          \
   HISTOGRAM(downstream_cx_length_ms, Milliseconds)                                                 \
   HISTOGRAM(downstream_rq_time, Milliseconds)
@@ -295,6 +296,12 @@ public:
   virtual absl::optional<std::chrono::milliseconds> maxConnectionDuration() const PURE;
 
   /**
+   * @return whether maxConnectionDuration allows HTTP1 clients to choose when to close connection
+   *         (rather than Envoy closing the connection itself when there are no active streams).
+   */
+  virtual bool http1SafeMaxConnectionDuration() const PURE;
+
+  /**
    * @return maximum request headers size the connection manager will accept.
    */
   virtual uint32_t maxRequestHeadersKb() const PURE;
@@ -368,6 +375,11 @@ public:
    * @return const absl::optional<std::string> the scheme name to write into requests.
    */
   virtual const absl::optional<std::string>& schemeToSet() const PURE;
+
+  /**
+   * @return bool whether the scheme should be overwritten to match the upstream transport protocol.
+   */
+  virtual bool shouldSchemeMatchUpstream() const PURE;
 
   /**
    * @return ConnectionManagerStats& the stats to write to.
@@ -538,10 +550,18 @@ public:
   virtual bool appendXForwardedPort() const PURE;
 
   /**
+   * @return whether to append the overload header to a local reply of a request which
+   * has been dropped due to Overload Manager.
+   */
+  virtual bool appendLocalOverload() const PURE;
+
+  /**
    * @return whether the HCM will insert ProxyProtocolFilterState into the filter state at the
    *         Connection Lifetime.
    */
   virtual bool addProxyProtocolConnectionState() const PURE;
 };
+
+using ConnectionManagerConfigSharedPtr = std::shared_ptr<ConnectionManagerConfig>;
 } // namespace Http
 } // namespace Envoy

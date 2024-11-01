@@ -16,7 +16,7 @@ After the stream client is obtained, it should be stored and used to start netwo
 **Kotlin example**::
 
   val streamClient = AndroidEngineBuilder(getApplication())
-    .addLogLevel(LogLevel.WARN)
+    .setLogLevel(LogLevel.WARN)
     ...
     .build()
     .streamClient()
@@ -24,7 +24,7 @@ After the stream client is obtained, it should be stored and used to start netwo
 **Swift example**::
 
   let streamClient = try EngineBuilder()
-    .addLogLevel(.warn)
+    .setLogLevel(.warn)
     ...
     .build()
     .streamClient()
@@ -110,7 +110,7 @@ Add a list of hostnames to preresolve on Engine startup.
   builder.addDNSPreresolveHostnames(["lyft.com", "google.com"])
 
 ~~~~~~~~~~~~~~~
-``addLogLevel``
+``setLogLevel``
 ~~~~~~~~~~~~~~~
 
 Specify the log level to be used when running the underlying Envoy engine.
@@ -118,48 +118,10 @@ Specify the log level to be used when running the underlying Envoy engine.
 **Example**::
 
   // Kotlin
-  builder.addLogLevel(LogLevel.WARN)
+  builder.setLogLevel(LogLevel.WARN)
 
   // Swift
-  builder.addLogLevel(.warn)
-
-~~~~~~~~~~~~~~~~~~~~~~
-``addGrpcStatsDomain``
-~~~~~~~~~~~~~~~~~~~~~~
-
-Specify a domain which implements the
-:tree:`stats endpoint <83908423d46a37574e9a35627df1f3dd9634e5ec/library/common/config_template.cc#L139-L145>`
-in order to take advantage of the
-`stats emitted by Envoy <https://www.envoyproxy.io/docs/envoy/latest/configuration/upstream/cluster_manager/cluster_stats>`_
-(and subsequently Envoy Mobile).
-
-Note that only stats specified in the configuration's
-:tree:`inclusion list <83908423d46a37574e9a35627df1f3dd9634e5ec/library/common/config_template.cc#L146-L167>`
-will be emitted.
-
-Passing ``nil``/``null`` disables stats emission, and this is the default value.
-
-**Example**::
-
-  // Kotlin
-  builder.addGrpcStatsDomain("envoy-mobile.envoyproxy.io")
-
-  // Swift
-  builder.addGrpcStatsDomain("envoy-mobile.envoyproxy.io")
-
-~~~~~~~~~~~~~~~~~~~~~~~~
-``addStatsFlushSeconds``
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-Specify the rate at which Envoy Mobile should flush its queued stats.
-
-**Example**::
-
-  // Kotlin
-  builder.addStatsFlushSeconds(5L)
-
-  // Swift
-  builder.addStatsFlushSeconds(5)
+  builder.setLogLevel(.warn)
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ``addStreamIdleTimeoutSeconds``
@@ -200,7 +162,6 @@ for further information.
 ~~~~~~~~~~~~~~~~~
 
 Specify the version of the app using Envoy Mobile.
-This information is sent as metadata when flushing stats.
 
 **Example**::
 
@@ -215,7 +176,6 @@ This information is sent as metadata when flushing stats.
 ~~~~~~~~~~~~
 
 Specify the version of the app using Envoy Mobile.
-This information is sent as metadata when flushing stats.
 
 **Example**::
 
@@ -238,15 +198,15 @@ Add a C++ filter to the Envoy Mobile filter chain
     library to ``envoy_build_config/extensions_build_config.bzl`` is sufficient.
     For iOS, due to enthusiastic garbage collection, and for upstream CI, to catch bugs, you will
     also need to forceRegister the filter in ``envoy_build_config/extension_registry.cc``
+    Both platforms use proto syntax by default, but YAML is supported if you build with --define=envoy_yaml=enabled
 
 **Example**::
 
   // Kotlin
-  builder.addNativeFilter("envoy.filters.http.buffer", "{\"@type\":\"type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer\",\"max_request_bytes\":5242880}")
+  builder.addNativeFilter("envoy.filters.http.buffer", "[type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer] { max_request_bytes: { value: 5242880 } ")
 
   // Swift
-  builder.addNativeFilter("envoy.filters.http.buffer", "{\"@type\":\"type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer\",\"max_request_bytes\":5242880}")
-
+  builder.addNativeFilter("envoy.filters.http.buffer", "[type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer] { max_request_bytes: { value: 5242880 } ")
 ~~~~~~~~~~~~~~~~~~~~~~
 ``setOnEngineRunning``
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -276,9 +236,10 @@ Specify a closure to be called when Envoy's engine emits a log message.
 
   // Kotlin
   // This interface is pending for Kotlin
+  builder.setLogger { level, message -> /* log it */ }
 
   // Swift
-  builder.setLogger { msg in
+  builder.setLogger { level, msg in
     NSLog("Envoy log: \(msg)")
   }
 
@@ -394,6 +355,23 @@ This allows HTTP/3 to be used for the first request to the hosts and avoid the H
 
   // Swift
   builder.addQuicHint("www.example.com", 443)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``addQuicCanonicalSuffix``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add a canonical suffix that's known to speak QUIC.
+This feature works as a extension to QUIC hints in such way that:
+if `.abc.com` is added to canonical suffix, and `foo.abc.com` is added to QUIC hint, then all requests to
+`*.abc.com` will be considered QUIC ready.
+
+**Example**::
+
+  // Kotlin
+  builder.addQuicCanonicalSuffix(".example.com")
+
+  // Swift
+  builder.addQuicCanonicalSuffix(".example.com")
 
 ~~~~~~~~~~~~~~~~~~~~~~~
 ``enableSocketTagging``
@@ -512,7 +490,7 @@ A maximum of 100 entries will be stored.
 
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-``setRuntimeGuard``
+``addRuntimeGuard``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Adds a runtime guard key value pair to envoy configuration.  The guard is of the short form "feature"
@@ -522,10 +500,10 @@ Note that Envoy will fail to start up in debug mode if an unknown guard is speci
 **Example**::
 
   // Kotlin
-  builder.setRuntimeGuard("feature", true)
+  builder.addRuntimeGuard("feature", true)
 
   // Swift
-  builder.setRuntimeGuard("feature", true)
+  builder.addRuntimeGuard("feature", true)
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ``setXds``
@@ -616,8 +594,7 @@ This may be done by initializing a builder with the contents of the YAML file yo
 **Kotlin example**::
 
   val streamClient = AndroidEngineBuilder(baseContext, Yaml(yamlFileString))
-    .addLogLevel(LogLevel.WARN)
-    .addStatsFlushSeconds(60)
+    .setLogLevel(LogLevel.WARN)
     ...
     .build()
     .streamClient()
@@ -625,8 +602,7 @@ This may be done by initializing a builder with the contents of the YAML file yo
 **Swift example**::
 
   let streamClient = try EngineBuilder(yaml: yamlFileString)
-    .addLogLevel(.warn)
-    .addStatsFlushSeconds(60)
+    .setLogLevel(.warn)
     ...
     .build()
     .streamClient()

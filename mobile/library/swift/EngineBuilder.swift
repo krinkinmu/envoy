@@ -1,203 +1,41 @@
-#if canImport(EnvoyCxxSwiftInterop)
-@_implementationOnly import EnvoyCxxSwiftInterop
-#endif
 @_implementationOnly import EnvoyEngine
 import Foundation
-
-// swiftlint:disable file_length
-
-#if ENVOY_GOOGLE_GRPC
-/// Builder for generating the xDS configuration for the Envoy Mobile engine.
-/// xDS is a protocol for dynamic configuration of Envoy instances, more information can be found in
-/// https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol.
-///
-/// This class is typically used as input to the EngineBuilder's setXds() method.
-@objcMembers
-open class XdsBuilder: NSObject {
-  public static let defaultJwtTokenLifetimeInSeconds: UInt32 = 60 * 60 * 24 * 90 // 90 days
-  public static let defaultXdsTimeoutInSeconds: UInt32 = 5
-
-  let xdsServerAddress: String
-  let xdsServerPort: UInt32
-  var authHeader: String?
-  var authToken: String?
-  var jwtToken: String?
-  var jwtTokenLifetimeInSeconds: UInt32 = XdsBuilder.defaultJwtTokenLifetimeInSeconds
-  var sslRootCerts: String?
-  var sni: String?
-  var rtdsResourceName: String?
-  var rtdsTimeoutInSeconds: UInt32 = 0
-  var enableCds: Bool = false
-  var cdsResourcesLocator: String?
-  var cdsTimeoutInSeconds: UInt32 = 0
-
-  /// Initialize a new builder for xDS configuration.
-  ///
-  /// - parameter xdsServerAddress: The host name or IP address of the xDS management server.
-  /// - parameter xdsServerPort:    The port on which the server listens for client connections.
-  public init(xdsServerAddress: String, xdsServerPort: UInt32) {
-    self.xdsServerAddress = xdsServerAddress
-    self.xdsServerPort = xdsServerPort
-  }
-
-  /// Sets the authentication HTTP header and token value for authentication with the xDS
-  /// management server.
-  ///
-  /// - parameter header: The HTTP authentication header.
-  /// - parameter token:  The authentication token to be sent in the header.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func setAuthenticationToken(
-    header: String,
-    token: String) -> Self {
-    self.authHeader = header
-    self.authToken = token
-    return self
-  }
-
-  /// Sets JWT as the authentication method to the xDS management server, using the given token.
-  ///
-  /// - parameter token:                  The JWT token used to authenticate the client to the xDS
-  ///                                     management server.
-  /// - parameter tokenLifetimeInSeconds: <optional> the lifetime of the JWT token, in seconds. If
-  ///                                     none (or 0) is specified, then
-  ///                                     defaultJwtTokenLifetimeSeconds is used.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func setJwtAuthenticationToken(
-    token: String,
-    tokenLifetimeInSeconds: UInt32 = XdsBuilder.defaultJwtTokenLifetimeInSeconds) -> Self {
-    self.jwtToken = token
-    self.jwtTokenLifetimeInSeconds = (tokenLifetimeInSeconds > 0) ?
-        tokenLifetimeInSeconds : XdsBuilder.defaultJwtTokenLifetimeInSeconds
-    return self
-  }
-
-  /// Sets the PEM-encoded server root certificates used to negotiate the TLS handshake for the gRPC
-  /// connection. If no root certs are specified, the operating system defaults are used.
-  ///
-  /// - parameter rootCerts: The PEM-encoded server root certificates.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func setSslRootCerts(rootCerts: String) -> Self {
-    self.sslRootCerts = rootCerts
-    return self
-  }
-
-  /// Sets the SNI (https://datatracker.ietf.org/doc/html/rfc6066#section-3) on the TLS handshake
-  /// and the authority HTTP header. If not set, the SNI is set by default to the xDS server address
-  /// and the authority HTTP header is not set.
-  ///
-  /// - parameter sni: The SNI (server name identification) value.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func setSni(sni: String) -> Self {
-    self.sni = sni
-    return self
-  }
-
-  /// Adds Runtime Discovery Service (RTDS) to the Runtime layers of the Bootstrap configuration,
-  /// to retrieve dynamic runtime configuration via the xDS management server.
-  ///
-  /// - parameter resourceName:     The runtime config resource to subscribe to.
-  /// - parameter timeoutInSeconds: <optional> specifies the `initial_fetch_timeout` field on the
-  ///                               api.v3.core.ConfigSource. Unlike the ConfigSource default of
-  ///                               15s, we set a default fetch timeout value of 5s, to prevent
-  ///                               mobile app initialization from stalling. The default parameter
-  ///                               value may change through the course of experimentation and no
-  ///                               assumptions should be made of its exact value.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func addRuntimeDiscoveryService(
-    resourceName: String,
-    timeoutInSeconds: UInt32 = XdsBuilder.defaultXdsTimeoutInSeconds) -> Self {
-    self.rtdsResourceName = resourceName
-    self.rtdsTimeoutInSeconds = timeoutOrXdsDefault(timeoutInSeconds)
-    return self
-  }
-
-  /// Adds the Cluster Discovery Service (CDS) configuration for retrieving dynamic cluster
-  /// resources via the xDS management server.
-  ///
-  /// - parameter cdsResourcesLocator: <optional> the xdstp:// URI for subscribing to the cluster
-  ///                                  resources. If not using xdstp, then `cds_resources_locator`
-  ///                                  should be set to the empty string.
-  /// - parameter timeoutInSeconds:    <optional> specifies the `initial_fetch_timeout` field on the
-  ///                                  api.v3.core.ConfigSource. Unlike the ConfigSource default of
-  ///                                  15s, we set a default fetch timeout value of 5s, to prevent
-  ///                                  mobile app initialization from stalling. The default
-  ///                                  parameter value may change through the course of
-  ///                                  experimentation and no assumptions should be made of its
-  ///                                  exact value.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func addClusterDiscoveryService(
-    cdsResourcesLocator: String? = nil,
-    timeoutInSeconds: UInt32 = XdsBuilder.defaultXdsTimeoutInSeconds) -> Self {
-    self.enableCds = true
-    self.cdsResourcesLocator = cdsResourcesLocator
-    self.cdsTimeoutInSeconds = timeoutOrXdsDefault(timeoutInSeconds)
-    return self
-  }
-
-  private func timeoutOrXdsDefault(_ timeout: UInt32) -> UInt32 {
-    return timeout > 0 ? timeout : XdsBuilder.defaultXdsTimeoutInSeconds
-  }
-}
-#endif
 
 /// Builder used for creating and running a new Engine instance.
 @objcMembers
 open class EngineBuilder: NSObject {
-  // swiftlint:disable:previous type_body_length
-  private let base: BaseConfiguration
   private var engineType: EnvoyEngine.Type = EnvoyEngineImpl.self
   private var logLevel: LogLevel = .info
-
-  private enum BaseConfiguration {
-    case standard
-    case custom(String)
-  }
-
-  private var grpcStatsDomain: String?
   private var connectTimeoutSeconds: UInt32 = 30
   private var dnsFailureRefreshSecondsBase: UInt32 = 2
   private var dnsFailureRefreshSecondsMax: UInt32 = 10
-  private var dnsQueryTimeoutSeconds: UInt32 = 25
+  private var dnsQueryTimeoutSeconds: UInt32 = 5
   private var dnsMinRefreshSeconds: UInt32 = 60
   private var dnsPreresolveHostnames: [String] = []
   private var dnsRefreshSeconds: UInt32 = 60
   private var enableDNSCache: Bool = false
   private var dnsCacheSaveIntervalSeconds: UInt32 = 1
+  private var dnsNumRetries: Int = -1
   private var enableGzipDecompression: Bool = true
   private var enableBrotliDecompression: Bool = false
-#if ENVOY_ENABLE_QUIC
   private var enableHttp3: Bool = true
-#else
-  private var enableHttp3: Bool = false
-#endif
   private var quicHints: [String: Int] = [:]
+  private var quicCanonicalSuffixes: [String] = []
   private var enableInterfaceBinding: Bool = false
   private var enforceTrustChainVerification: Bool = true
   private var enablePlatformCertificateValidation: Bool = false
+  private var upstreamTlsSni: String?
+  private var respectSystemProxySettings: Bool = false
   private var enableDrainPostDnsRefresh: Bool = false
-  private var forceIPv6: Bool = false
   private var h2ConnectionKeepaliveIdleIntervalMilliseconds: UInt32 = 1
   private var h2ConnectionKeepaliveTimeoutSeconds: UInt32 = 10
   private var maxConnectionsPerHost: UInt32 = 7
-  private var statsFlushSeconds: UInt32 = 60
   private var streamIdleTimeoutSeconds: UInt32 = 15
   private var perTryIdleTimeoutSeconds: UInt32 = 15
   private var appVersion: String = "unspecified"
   private var appId: String = "unspecified"
   private var onEngineRunning: (() -> Void)?
-  private var logger: ((String) -> Void)?
+  private var logger: ((LogLevel, String) -> Void)?
   private var eventTracker: (([String: String]) -> Void)?
   private(set) var monitoringMode: NetworkMonitoringMode = .pathMonitor
   private var nativeFilterChain: [EnvoyNativeFilterConfig] = []
@@ -205,65 +43,19 @@ open class EngineBuilder: NSObject {
   private var stringAccessors: [String: EnvoyStringAccessor] = [:]
   private var keyValueStores: [String: EnvoyKeyValueStore] = [:]
   private var runtimeGuards: [String: Bool] = [:]
-  private var statsSinks: [String] = []
-  private var nodeID: String?
-  private var nodeRegion: String?
-  private var nodeZone: String?
-  private var nodeSubZone: String?
-#if ENVOY_GOOGLE_GRPC
-  private var xdsBuilder: XdsBuilder?
-#endif
-  private var enableSwiftBootstrap = false
 
   // MARK: - Public
 
-  /// Initialize a new builder with standard HTTP library configuration.
-  public override init() {
-    self.base = .standard
-  }
+  /// Initialize a new builder.
+  public override init() {}
 
-  /// Initialize a new builder with a custom full YAML configuration.
-  /// Setting other attributes in this builder will have no effect.
-  ///
-  /// - parameter yaml: Contents of a YAML file to use for configuration.
-  public init(yaml: String) {
-    self.base = .custom(yaml)
-  }
-
-#if ENVOY_MOBILE_STATS_REPORTING
-  /// Add a stats domain for Envoy to flush stats to.
-  /// Passing nil disables stats emission.
-  ///
-  /// - parameter grpcStatsDomain: The domain to use for stats.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func addGrpcStatsDomain(_ grpcStatsDomain: String?) -> Self {
-    self.grpcStatsDomain = grpcStatsDomain
-    return self
-  }
-
-  /// Adds additional stats sink, in the form of the raw YAML/JSON configuration.
-  /// Sinks added in this fashion will be included in addition to the gRPC stats sink
-  /// that may be enabled via addGrpcStatsDomain.
-  ///
-  /// - parameter statsSinks: Configurations of stat sinks to add.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func addStatsSinks(_ statsSinks: [String]) -> Self {
-    self.statsSinks = statsSinks
-    return self
-  }
-#endif
-
-  /// Add a log level to use with Envoy.
+  /// Set a log level to use with Envoy.
   ///
   /// - parameter logLevel: The log level to use with Envoy.
   ///
   /// - returns: This builder.
   @discardableResult
-  public func addLogLevel(_ logLevel: LogLevel) -> Self {
+  public func setLogLevel(_ logLevel: LogLevel) -> Self {
     self.logLevel = logLevel
     return self
   }
@@ -355,6 +147,18 @@ open class EngineBuilder: NSObject {
     return self
   }
 
+  /// Specifies the number of retries before the resolver gives up. If not specified, the resolver
+  /// will retry indefinitely until it succeeds or the DNS query times out.
+  ///
+  /// - parameter dnsNumRetries: the number of retries
+  ///
+  /// - returns: This builder.
+  @discardableResult
+  public func setDnsNumRetries(_ dnsNumRetries: Int) -> Self {
+    self.dnsNumRetries = dnsNumRetries
+    return self
+  }
+
   /// Specify whether to do gzip response decompression or not.  Defaults to true.
   ///
   /// - parameter enableGzipDecompression: whether or not to gunzip responses.
@@ -377,7 +181,6 @@ open class EngineBuilder: NSObject {
     return self
   }
 
-#if ENVOY_ENABLE_QUIC
   /// Specify whether to enable support for HTTP/3 or not.  Defaults to true.
   ///
   /// - parameter enableHttp3: whether or not to enable HTTP/3.
@@ -400,16 +203,15 @@ open class EngineBuilder: NSObject {
     self.quicHints[host] = port
     return self
   }
-#endif
 
-  /// Add an interval at which to flush Envoy stats.
+  /// Add a host suffix that's known to support QUIC.
   ///
-  /// - parameter statsFlushSeconds: Interval at which to flush Envoy stats.
+  /// - parameter suffix: the string representation of the host suffix
   ///
   /// - returns: This builder.
   @discardableResult
-  public func addStatsFlushSeconds(_ statsFlushSeconds: UInt32) -> Self {
-    self.statsFlushSeconds = statsFlushSeconds
+  public func addQuicCanonicalSuffix(_ suffix: String) -> Self {
+    self.quicCanonicalSuffixes.append(suffix)
     return self
   }
 
@@ -422,6 +224,25 @@ open class EngineBuilder: NSObject {
   @discardableResult
   public func enableInterfaceBinding(_ enableInterfaceBinding: Bool) -> Self {
     self.enableInterfaceBinding = enableInterfaceBinding
+    return self
+  }
+
+  ///
+  /// Specify whether system proxy settings should be respected. If yes, Envoy Mobile will
+  /// use iOS APIs to query iOS Proxy settings configured on a device and will
+  /// respect these settings when establishing connections with remote services.
+  ///
+  /// The method is introduced for experimentation purposes and as a safety guard against
+  /// critical issues in the implementation of the proxying feature. It's intended to be removed
+  /// after it's confirmed that proxies on iOS work as expected.
+  ///
+  /// - parameter respectSystemProxySettings: whether to use the system's proxy settings for
+  ///                                         outbound connections.
+  ///
+  /// - returns: This builder.
+  @discardableResult
+  public func respectSystemProxySettings(_ respectSystemProxySettings: Bool) -> Self {
+    self.respectSystemProxySettings = respectSystemProxySettings
     return self
   }
 
@@ -462,15 +283,14 @@ open class EngineBuilder: NSObject {
     return self
   }
 
-  /// Specify whether to remap IPv4 addresses to the IPv6 space and always force connections
-  /// to use IPv6. Note this is an experimental option and should be enabled with caution.
+  /// Sets the SNI override on the upstream TLS socket context.
   ///
-  /// - parameter forceIPv6: whether to force connections to use IPv6.
+  /// - parameter sni: The SNI.
   ///
   /// - returns: This builder.
   @discardableResult
-  public func forceIPv6(_ forceIPv6: Bool) -> Self {
-    self.forceIPv6 = forceIPv6
+  public func setUpstreamTlsSni(_ sni: String) -> Self {
+    self.upstreamTlsSni = sni
     return self
   }
 
@@ -603,14 +423,16 @@ open class EngineBuilder: NSObject {
     return self
   }
 
-  /// Set a runtime guard with the provided value.
+  // Adds a runtime guard for the `envoy.reloadable_features.<guard>`.
+  // For example if the runtime guard is `envoy.reloadable_features.use_foo`, the guard name is
+  // `use_foo`.
   ///
   /// - parameter name:  the name of the runtime guard, e.g. test_feature_false.
   /// - parameter value: the value for the runtime guard.
   ///
   /// - returns: This builder.
   @discardableResult
-  public func setRuntimeGuard(_ name: String, _ value: Bool) -> Self {
+  public func addRuntimeGuard(_ name: String, _ value: Bool) -> Self {
     self.runtimeGuards[name] = value
     return self
   }
@@ -632,7 +454,7 @@ open class EngineBuilder: NSObject {
   ///
   /// - returns: This builder.
   @discardableResult
-  public func setLogger(closure: @escaping (String) -> Void) -> Self {
+  public func setLogger(closure: @escaping (LogLevel, String) -> Void) -> Self {
     self.logger = closure
     return self
   }
@@ -682,87 +504,25 @@ open class EngineBuilder: NSObject {
     return self
   }
 
-  /// Sets the node.id field in the Bootstrap configuration.
-  ///
-  /// - parameter nodeID: The node ID.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func setNodeID(_ nodeID: String) -> Self {
-    self.nodeID = nodeID
-    return self
-  }
-
-  /// Sets the node locality in the Bootstrap configuration.
-  ///
-  /// - parameter region:  The region.
-  /// - parameter zone:    The zone.
-  /// - parameter subZone: The sub-zone.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func setNodeLocality(
-    region: String,
-    zone: String,
-    subZone: String
-  ) -> Self {
-    self.nodeRegion = region
-    self.nodeZone = zone
-    self.nodeSubZone = subZone
-    return self
-  }
-
-#if ENVOY_GOOGLE_GRPC
-  /// Sets the xDS configuration for the Envoy Mobile engine.
-  ///
-  /// - parameter xdsBuilder: The XdsBuilder instance which specifies the xDS config options.
-  ///                         The EngineBuilder takes ownership over the xds_builder.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func setXds(_ xdsBuilder: XdsBuilder) -> Self {
-    self.xdsBuilder = xdsBuilder
-    return self
-  }
-#endif
-
-#if canImport(EnvoyCxxSwiftInterop)
-  /// Use Swift's experimental C++ interop support to generate the bootstrap object
-  /// instead of going through the Objective-C layer.
-  ///
-  /// - parameter enableSwiftBootstrap: Whether or not to use the Swift / C++ interop
-  ///                                   to generate the bootstrap object.
-  ///
-  /// - returns: This builder.
-  @discardableResult
-  public func enableSwiftBootstrap(_ enableSwiftBootstrap: Bool) -> Self {
-    self.enableSwiftBootstrap = enableSwiftBootstrap
-    return self
-  }
-#endif
-
   /// Builds and runs a new `Engine` instance with the provided configuration.
   ///
   /// - note: Must be strongly retained in order for network requests to be performed correctly.
   ///
   /// - returns: The built `Engine`.
   public func build() -> Engine {
-    let engine = self.engineType.init(runningCallback: self.onEngineRunning, logger: self.logger,
+    let engine = self.engineType.init(runningCallback: self.onEngineRunning,
+                                      logger: { level, message in
+                                        if let log = self.logger {
+                                          if let lvl = LogLevel(rawValue: level) {
+                                            log(lvl, message)
+                                          }
+                                        }
+                                      },
                                       eventTracker: self.eventTracker,
                                       networkMonitoringMode: Int32(self.monitoringMode.rawValue))
     let config = self.makeConfig()
-#if canImport(EnvoyCxxSwiftInterop)
-    if self.enableSwiftBootstrap {
-      config.bootstrapPointer = self.generateBootstrap().pointer
-    }
-#endif
 
-    switch self.base {
-    case .custom(let yaml):
-      return EngineImpl(yaml: yaml, config: config, logLevel: self.logLevel, engine: engine)
-    case .standard:
-      return EngineImpl(config: config, logLevel: self.logLevel, engine: engine)
-    }
+    return EngineImpl(config: config, logLevel: self.logLevel, engine: engine)
   }
 
   // MARK: - Internal
@@ -783,38 +543,7 @@ open class EngineBuilder: NSObject {
   }
 
   func makeConfig() -> EnvoyConfiguration {
-    var xdsServerAddress: String?
-    var xdsServerPort: UInt32 = 0
-    var xdsAuthHeader: String?
-    var xdsAuthToken: String?
-    var xdsJwtToken: String?
-    var xdsJwtTokenLifetimeSeconds: UInt32 = 0
-    var xdsSslRootCerts: String?
-    var xdsSni: String?
-    var rtdsResourceName: String?
-    var rtdsTimeoutSeconds: UInt32 = 0
-    var enableCds: Bool = false
-    var cdsResourcesLocator: String?
-    var cdsTimeoutSeconds: UInt32 = 0
-
-#if ENVOY_GOOGLE_GRPC
-    xdsServerAddress = self.xdsBuilder?.xdsServerAddress
-    xdsServerPort = self.xdsBuilder?.xdsServerPort ?? 0
-    xdsAuthHeader = self.xdsBuilder?.authHeader
-    xdsAuthToken = self.xdsBuilder?.authToken
-    xdsJwtToken = self.xdsBuilder?.jwtToken
-    xdsJwtTokenLifetimeSeconds = self.xdsBuilder?.jwtTokenLifetimeInSeconds ?? 0
-    xdsSslRootCerts = self.xdsBuilder?.sslRootCerts
-    xdsSni = self.xdsBuilder?.sni
-    rtdsResourceName = self.xdsBuilder?.rtdsResourceName
-    rtdsTimeoutSeconds = self.xdsBuilder?.rtdsTimeoutInSeconds ?? 0
-    enableCds = self.xdsBuilder?.enableCds ?? false
-    cdsResourcesLocator = self.xdsBuilder?.cdsResourcesLocator
-    cdsTimeoutSeconds = self.xdsBuilder?.cdsTimeoutInSeconds ?? 0
-#endif
-
     return EnvoyConfiguration(
-      grpcStatsDomain: self.grpcStatsDomain,
       connectTimeoutSeconds: self.connectTimeoutSeconds,
       dnsRefreshSeconds: self.dnsRefreshSeconds,
       dnsFailureRefreshSecondsBase: self.dnsFailureRefreshSecondsBase,
@@ -824,20 +553,22 @@ open class EngineBuilder: NSObject {
       dnsPreresolveHostnames: self.dnsPreresolveHostnames,
       enableDNSCache: self.enableDNSCache,
       dnsCacheSaveIntervalSeconds: self.dnsCacheSaveIntervalSeconds,
+      dnsNumRetries: self.dnsNumRetries,
       enableHttp3: self.enableHttp3,
       quicHints: self.quicHints.mapValues { NSNumber(value: $0) },
+      quicCanonicalSuffixes: self.quicCanonicalSuffixes,
       enableGzipDecompression: self.enableGzipDecompression,
       enableBrotliDecompression: self.enableBrotliDecompression,
       enableInterfaceBinding: self.enableInterfaceBinding,
       enableDrainPostDnsRefresh: self.enableDrainPostDnsRefresh,
       enforceTrustChainVerification: self.enforceTrustChainVerification,
-      forceIPv6: self.forceIPv6,
       enablePlatformCertificateValidation: self.enablePlatformCertificateValidation,
+      upstreamTlsSni: self.upstreamTlsSni,
+      respectSystemProxySettings: self.respectSystemProxySettings,
       h2ConnectionKeepaliveIdleIntervalMilliseconds:
         self.h2ConnectionKeepaliveIdleIntervalMilliseconds,
       h2ConnectionKeepaliveTimeoutSeconds: self.h2ConnectionKeepaliveTimeoutSeconds,
       maxConnectionsPerHost: self.maxConnectionsPerHost,
-      statsFlushSeconds: self.statsFlushSeconds,
       streamIdleTimeoutSeconds: self.streamIdleTimeoutSeconds,
       perTryIdleTimeoutSeconds: self.perTryIdleTimeoutSeconds,
       appVersion: self.appVersion,
@@ -846,146 +577,12 @@ open class EngineBuilder: NSObject {
       nativeFilterChain: self.nativeFilterChain,
       platformFilterChain: self.platformFilterChain,
       stringAccessors: self.stringAccessors,
-      keyValueStores: self.keyValueStores,
-      statsSinks: self.statsSinks,
-      nodeId: self.nodeID,
-      nodeRegion: self.nodeRegion,
-      nodeZone: self.nodeZone,
-      nodeSubZone: self.nodeSubZone,
-      xdsServerAddress: xdsServerAddress,
-      xdsServerPort: xdsServerPort,
-      xdsAuthHeader: xdsAuthHeader,
-      xdsAuthToken: xdsAuthToken,
-      xdsJwtToken: xdsJwtToken,
-      xdsJwtTokenLifetimeSeconds: xdsJwtTokenLifetimeSeconds,
-      xdsSslRootCerts: xdsSslRootCerts,
-      xdsSni: xdsSni,
-      rtdsResourceName: rtdsResourceName,
-      rtdsTimeoutSeconds: rtdsTimeoutSeconds,
-      enableCds: enableCds,
-      cdsResourcesLocator: cdsResourcesLocator,
-      cdsTimeoutSeconds: cdsTimeoutSeconds
+      keyValueStores: self.keyValueStores
     )
   }
 
   func bootstrapDebugDescription() -> String {
     let objcDescription = self.makeConfig().bootstrapDebugDescription()
-#if canImport(EnvoyCxxSwiftInterop)
-    assert(
-      self.generateBootstrap().debugDescription == objcDescription,
-      "Swift bootstrap is different from ObjC bootstrap"
-    )
-#endif
     return objcDescription
   }
 }
-
-#if canImport(EnvoyCxxSwiftInterop)
-private extension EngineBuilder {
-  func generateBootstrap() -> Bootstrap {
-    var cxxBuilder = Envoy.Platform.EngineBuilder()
-    cxxBuilder.addLogLevel(self.logLevel.toCXX())
-    if let grpcStatsDomain = self.grpcStatsDomain {
-      cxxBuilder.addGrpcStatsDomain(grpcStatsDomain.toCXX())
-    }
-
-    cxxBuilder.addConnectTimeoutSeconds(Int32(self.connectTimeoutSeconds))
-    cxxBuilder.addDnsRefreshSeconds(Int32(self.dnsRefreshSeconds))
-    cxxBuilder.addDnsFailureRefreshSeconds(Int32(self.dnsFailureRefreshSecondsBase),
-                                           Int32(self.dnsFailureRefreshSecondsMax))
-    cxxBuilder.addDnsQueryTimeoutSeconds(Int32(self.dnsQueryTimeoutSeconds))
-    cxxBuilder.addDnsMinRefreshSeconds(Int32(self.dnsMinRefreshSeconds))
-    cxxBuilder.addDnsPreresolveHostnames(self.dnsPreresolveHostnames.toCXX())
-    cxxBuilder.enableDnsCache(self.enableDNSCache, Int32(self.dnsCacheSaveIntervalSeconds))
-#if ENVOY_ENABLE_QUIC
-    cxxBuilder.enableHttp3(self.enableHttp3)
-    for (host, port) in self.quicHints {
-      cxxBuilder.addQuicHint(host.toCXX(), Int32(port))
-    }
-#endif
-    cxxBuilder.enableGzipDecompression(self.enableGzipDecompression)
-    cxxBuilder.enableBrotliDecompression(self.enableBrotliDecompression)
-    cxxBuilder.enableInterfaceBinding(self.enableInterfaceBinding)
-    cxxBuilder.enableDrainPostDnsRefresh(self.enableDrainPostDnsRefresh)
-    cxxBuilder.enforceTrustChainVerification(self.enforceTrustChainVerification)
-    cxxBuilder.setForceAlwaysUsev6(self.forceIPv6)
-    cxxBuilder.enablePlatformCertificatesValidation(self.enablePlatformCertificateValidation)
-    cxxBuilder.addH2ConnectionKeepaliveIdleIntervalMilliseconds(
-      Int32(self.h2ConnectionKeepaliveIdleIntervalMilliseconds)
-    )
-    cxxBuilder.addH2ConnectionKeepaliveTimeoutSeconds(
-      Int32(self.h2ConnectionKeepaliveTimeoutSeconds)
-    )
-    cxxBuilder.addMaxConnectionsPerHost(Int32(self.maxConnectionsPerHost))
-    cxxBuilder.addStatsFlushSeconds(Int32(self.statsFlushSeconds))
-    cxxBuilder.setStreamIdleTimeoutSeconds(Int32(self.streamIdleTimeoutSeconds))
-    cxxBuilder.setPerTryIdleTimeoutSeconds(Int32(self.perTryIdleTimeoutSeconds))
-    cxxBuilder.setAppVersion(self.appVersion.toCXX())
-    cxxBuilder.setAppId(self.appId.toCXX())
-    cxxBuilder.setDeviceOs("iOS".toCXX())
-
-    for (runtimeGuard, value) in self.runtimeGuards {
-      cxxBuilder.setRuntimeGuard(runtimeGuard.toCXX(), value)
-    }
-
-    for filter in self.nativeFilterChain.reversed() {
-      cxxBuilder.addNativeFilter(filter.name.toCXX(), filter.typedConfig.toCXX())
-    }
-
-    for filter in self.platformFilterChain.reversed() {
-      cxxBuilder.addPlatformFilter(filter.filterName.toCXX())
-    }
-
-    cxxBuilder.addStatsSinks(self.statsSinks.toCXX())
-
-    if
-      let nodeRegion = self.nodeRegion,
-      let nodeZone = self.nodeZone,
-      let nodeSubZone = self.nodeSubZone
-    {
-      cxxBuilder.setNodeLocality(nodeRegion.toCXX(), nodeZone.toCXX(), nodeSubZone.toCXX())
-    }
-
-    if let nodeID = self.nodeID {
-      cxxBuilder.setNodeId(nodeID.toCXX())
-    }
-
-    generateXds(&cxxBuilder)
-
-    return cxxBuilder.generateBootstrap()
-  }
-
-  private func generateXds(_ cxxBuilder: inout Envoy.Platform.EngineBuilder) {
-#if ENVOY_GOOGLE_GRPC
-    if let xdsBuilder = self.xdsBuilder {
-      var cxxXdsBuilder = Envoy.Platform.XdsBuilder(xdsBuilder.xdsServerAddress.toCXX(),
-                                                    Int32(xdsBuilder.xdsServerPort))
-      if let xdsAuthHeader = xdsBuilder.authHeader {
-        cxxXdsBuilder.setAuthenticationToken(xdsAuthHeader.toCXX(),
-                                             xdsBuilder.authToken?.toCXX() ?? "".toCXX())
-      }
-      if let xdsJwtToken = xdsBuilder.jwtToken {
-        cxxXdsBuilder.setJwtAuthenticationToken(xdsJwtToken.toCXX(),
-                                                Int32(xdsBuilder.jwtTokenLifetimeInSeconds))
-      }
-      if let xdsSslRootCerts = xdsBuilder.sslRootCerts {
-        cxxXdsBuilder.setSslRootCerts(xdsSslRootCerts.toCXX())
-      }
-      if let xdsSni = xdsBuilder.sni {
-        cxxXdsBuilder.setSni(xdsSni.toCXX())
-      }
-      if let rtdsResourceName = xdsBuilder.rtdsResourceName {
-        cxxXdsBuilder.addRuntimeDiscoveryService(rtdsResourceName.toCXX(),
-                                                 Int32(xdsBuilder.rtdsTimeoutInSeconds))
-      }
-      if xdsBuilder.enableCds {
-        cxxXdsBuilder.addClusterDiscoveryService(
-          xdsBuilder.cdsResourcesLocator?.toCXX() ?? "".toCXX(),
-          Int32(xdsBuilder.cdsTimeoutInSeconds))
-      }
-      cxxBuilder.setXds(cxxXdsBuilder)
-    }
-#endif
-  }
-}
-#endif

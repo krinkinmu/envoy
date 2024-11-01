@@ -16,6 +16,7 @@
 #include "envoy/http/hash_policy.h"
 #include "envoy/http/stateful_session.h"
 #include "envoy/local_info/local_info.h"
+#include "envoy/router/router_filter_interface.h"
 #include "envoy/router/shadow_writer.h"
 #include "envoy/runtime/runtime.h"
 #include "envoy/server/factory_context.h"
@@ -35,13 +36,14 @@
 #include "source/common/config/utility.h"
 #include "source/common/config/well_known_names.h"
 #include "source/common/http/filter_chain_helper.h"
+#include "source/common/http/sidestream_watermark.h"
 #include "source/common/http/utility.h"
 #include "source/common/router/config_impl.h"
 #include "source/common/router/context_impl.h"
 #include "source/common/router/upstream_request.h"
 #include "source/common/stats/symbol_table.h"
 #include "source/common/stream_info/stream_info_impl.h"
-#include "source/common/upstream/load_balancer_impl.h"
+#include "source/common/upstream/load_balancer_context_base.h"
 #include "source/common/upstream/upstream_factory_context_impl.h"
 
 namespace Envoy {
@@ -57,12 +59,6 @@ MAKE_STATS_STRUCT(FilterStats, StatNames, ALL_ROUTER_STATS);
  */
 class FilterUtility {
 public:
-  struct TimeoutData {
-    std::chrono::milliseconds global_timeout_{0};
-    std::chrono::milliseconds per_try_timeout_{0};
-    std::chrono::milliseconds per_try_idle_timeout_{0};
-  };
-
   struct HedgingParams {
     bool hedge_on_per_try_timeout_ : 1;
   };
@@ -124,11 +120,13 @@ public:
 
   /**
    * Set the :scheme header using the best information available. In order this is
+   * - whether the upstream connection is using TLS if use_upstream is true
    * - existing scheme header if valid
    * - x-forwarded-proto header if valid
-   * - security of downstream connection
+   * - whether the downstream connection is using TLS
    */
-  static void setUpstreamScheme(Http::RequestHeaderMap& headers, bool downstream_secure);
+  static void setUpstreamScheme(Http::RequestHeaderMap& headers, bool downstream_ssl,
+                                bool upstream_ssl, bool use_upstream);
 
   /**
    * Determine whether a request should be shadowed.
@@ -165,7 +163,7 @@ public:
    * @param grpc_request tells if the request is a gRPC request.
    * @param per_try_timeout_headging_enabled is request hedging enabled?
    */
-  static void setTimeoutHeaders(uint64_t elapsed_time, const FilterUtility::TimeoutData& timeout,
+  static void setTimeoutHeaders(uint64_t elapsed_time, const TimeoutData& timeout,
                                 const RouteEntry& route, Http::RequestHeaderMap& request_headers,
                                 bool insert_envoy_expected_request_timeout_ms, bool grpc_request,
                                 bool per_try_timeout_hedging_enabled);
@@ -203,7 +201,8 @@ public:
  */
 class FilterConfig : Http::FilterChainFactory {
 public:
-  FilterConfig(Stats::StatName stat_prefix, const LocalInfo::LocalInfo& local_info,
+  FilterConfig(Server::Configuration::CommonFactoryContext& factory_context,
+               Stats::StatName stat_prefix, const LocalInfo::LocalInfo& local_info,
                Stats::Scope& scope, Upstream::ClusterManager& cm, Runtime::Loader& runtime,
                Random::RandomGenerator& random, ShadowWriterPtr&& shadow_writer,
                bool emit_dynamic_stats, bool start_child_span, bool suppress_envoy_headers,
@@ -212,8 +211,9 @@ public:
                const Protobuf::RepeatedPtrField<std::string>& strict_check_headers,
                TimeSource& time_source, Http::Context& http_context,
                Router::Context& router_context)
-      : router_context_(router_context), scope_(scope), local_info_(local_info), cm_(cm),
-        runtime_(runtime), default_stats_(router_context_.statNames(), scope_, stat_prefix),
+      : factory_context_(factory_context), router_context_(router_context), scope_(scope),
+        local_info_(local_info), cm_(cm), runtime_(runtime),
+        default_stats_(router_context_.statNames(), scope_, stat_prefix),
         async_stats_(router_context_.statNames(), scope, http_context.asyncClientStatPrefix()),
         random_(random), emit_dynamic_stats_(emit_dynamic_stats),
         start_child_span_(start_child_span), suppress_envoy_headers_(suppress_envoy_headers),
@@ -248,9 +248,9 @@ public:
     return true;
   }
 
-  bool createUpgradeFilterChain(absl::string_view, const UpgradeMap*,
-                                Http::FilterChainManager&) const override {
-    // Upgrade filter chains not yet supported for upstream filters.
+  bool createUpgradeFilterChain(absl::string_view, const UpgradeMap*, Http::FilterChainManager&,
+                                const Http::FilterChainOptions&) const override {
+    // Upgrade filter chains not yet supported for upstream HTTP filters.
     return false;
   }
 
@@ -260,6 +260,7 @@ public:
   ShadowWriter& shadowWriter() { return *shadow_writer_; }
   TimeSource& timeSource() { return time_source_; }
 
+  Server::Configuration::CommonFactoryContext& factory_context_;
   Router::Context& router_context_;
   Stats::Scope& scope_;
   const LocalInfo::LocalInfo& local_info_;
@@ -294,47 +295,6 @@ using FilterConfigSharedPtr = std::shared_ptr<FilterConfig>;
 class UpstreamRequest;
 using UpstreamRequestPtr = std::unique_ptr<UpstreamRequest>;
 
-// The interface the UpstreamRequest has to interact with the router filter.
-// Split out primarily for unit test mocks.
-class RouterFilterInterface {
-public:
-  virtual ~RouterFilterInterface() = default;
-
-  virtual void onUpstream1xxHeaders(Http::ResponseHeaderMapPtr&& headers,
-                                    UpstreamRequest& upstream_request) PURE;
-  virtual void onUpstreamHeaders(uint64_t response_code, Http::ResponseHeaderMapPtr&& headers,
-                                 UpstreamRequest& upstream_request, bool end_stream) PURE;
-  virtual void onUpstreamData(Buffer::Instance& data, UpstreamRequest& upstream_request,
-                              bool end_stream) PURE;
-  virtual void onUpstreamTrailers(Http::ResponseTrailerMapPtr&& trailers,
-                                  UpstreamRequest& upstream_request) PURE;
-  virtual void onUpstreamMetadata(Http::MetadataMapPtr&& metadata_map) PURE;
-  virtual void onUpstreamReset(Http::StreamResetReason reset_reason,
-                               absl::string_view transport_failure,
-                               UpstreamRequest& upstream_request) PURE;
-  virtual void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host) PURE;
-  virtual void onPerTryTimeout(UpstreamRequest& upstream_request) PURE;
-  virtual void onPerTryIdleTimeout(UpstreamRequest& upstream_request) PURE;
-  virtual void onStreamMaxDurationReached(UpstreamRequest& upstream_request) PURE;
-
-  virtual Http::StreamDecoderFilterCallbacks* callbacks() PURE;
-  virtual Upstream::ClusterInfoConstSharedPtr cluster() PURE;
-  virtual FilterConfig& config() PURE;
-  virtual FilterUtility::TimeoutData timeout() PURE;
-  virtual absl::optional<std::chrono::milliseconds> dynamicMaxStreamDuration() const PURE;
-  virtual Http::RequestHeaderMap* downstreamHeaders() PURE;
-  virtual Http::RequestTrailerMap* downstreamTrailers() PURE;
-  virtual bool downstreamResponseStarted() const PURE;
-  virtual bool downstreamEndStream() const PURE;
-  virtual uint32_t attemptCount() const PURE;
-  virtual const VirtualCluster* requestVcluster() const PURE;
-  virtual const RouteStatsContextOptRef routeStatsContext() const PURE;
-  virtual const Route* route() const PURE;
-  virtual const std::list<UpstreamRequestPtr>& upstreamRequests() const PURE;
-  virtual const UpstreamRequest* finalUpstreamRequest() const PURE;
-  virtual TimeSource& timeSource() PURE;
-};
-
 /**
  * Service routing filter.
  */
@@ -343,15 +303,18 @@ class Filter : Logger::Loggable<Logger::Id::router>,
                public Upstream::LoadBalancerContextBase,
                public RouterFilterInterface {
 public:
-  Filter(FilterConfig& config, FilterStats& stats)
+  Filter(const FilterConfigSharedPtr& config, FilterStats& stats)
       : config_(config), stats_(stats), grpc_request_(false), exclude_http_code_stats_(false),
         downstream_response_started_(false), downstream_end_stream_(false), is_retry_(false),
         request_buffer_overflowed_(false), streaming_shadows_(Runtime::runtimeFeatureEnabled(
-                                               "envoy.reloadable_features.streaming_shadow")) {}
+                                               "envoy.reloadable_features.streaming_shadow")),
+        allow_multiplexed_upstream_half_close_(Runtime::runtimeFeatureEnabled(
+            "envoy.reloadable_features.allow_multiplexed_upstream_half_close")),
+        upstream_request_started_(false), orca_load_report_received_(false) {}
 
   ~Filter() override;
 
-  static StreamInfo::ResponseFlag
+  static StreamInfo::CoreResponseFlag
   streamResetReasonToResponseFlag(Http::StreamResetReason reset_reason);
 
   // Http::StreamFilterBase
@@ -461,6 +424,10 @@ public:
     return callbacks_->upstreamOverrideHost();
   }
 
+  void setOrcaLoadReportCallbacks(std::weak_ptr<OrcaLoadReportCallbacks> callbacks) override {
+    orca_load_report_callbacks_ = callbacks;
+  }
+
   /**
    * Set a computed cookie to be sent with the downstream headers.
    * @param key supplies the size of the cookie
@@ -499,14 +466,15 @@ public:
   void onUpstreamMetadata(Http::MetadataMapPtr&& metadata_map) override;
   void onUpstreamReset(Http::StreamResetReason reset_reason, absl::string_view transport_failure,
                        UpstreamRequest& upstream_request) override;
-  void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host) override;
+  void onUpstreamHostSelected(Upstream::HostDescriptionConstSharedPtr host,
+                              bool pool_success) override;
   void onPerTryTimeout(UpstreamRequest& upstream_request) override;
   void onPerTryIdleTimeout(UpstreamRequest& upstream_request) override;
   void onStreamMaxDurationReached(UpstreamRequest& upstream_request) override;
   Http::StreamDecoderFilterCallbacks* callbacks() override { return callbacks_; }
   Upstream::ClusterInfoConstSharedPtr cluster() override { return cluster_; }
-  FilterConfig& config() override { return config_; }
-  FilterUtility::TimeoutData timeout() override { return timeout_; }
+  FilterConfig& config() override { return *config_; }
+  TimeoutData timeout() override { return timeout_; }
   absl::optional<std::chrono::milliseconds> dynamicMaxStreamDuration() const override {
     return dynamic_max_stream_duration_;
   }
@@ -515,15 +483,10 @@ public:
   bool downstreamResponseStarted() const override { return downstream_response_started_; }
   bool downstreamEndStream() const override { return downstream_end_stream_; }
   uint32_t attemptCount() const override { return attempt_count_; }
-  const VirtualCluster* requestVcluster() const override { return request_vcluster_; }
-  const RouteStatsContextOptRef routeStatsContext() const override { return route_stats_context_; }
-  const Route* route() const override { return route_.get(); }
-  const std::list<UpstreamRequestPtr>& upstreamRequests() const override {
-    return upstream_requests_;
-  }
-  const UpstreamRequest* finalUpstreamRequest() const override { return final_upstream_request_; }
-  TimeSource& timeSource() override { return config_.timeSource(); }
+  const std::list<UpstreamRequestPtr>& upstreamRequests() const { return upstream_requests_; }
 
+  TimeSource& timeSource() { return config_->timeSource(); }
+  const Route* route() const { return route_.get(); }
   const FilterStats& stats() { return stats_; }
 
 protected:
@@ -550,9 +513,9 @@ private:
   virtual RetryStatePtr
   createRetryState(const RetryPolicy& policy, Http::RequestHeaderMap& request_headers,
                    const Upstream::ClusterInfo& cluster, const VirtualCluster* vcluster,
-                   RouteStatsContextOptRef route_stats_context, Runtime::Loader& runtime,
-                   Random::RandomGenerator& random, Event::Dispatcher& dispatcher,
-                   TimeSource& time_source, Upstream::ResourcePriority priority) PURE;
+                   RouteStatsContextOptRef route_stats_context,
+                   Server::Configuration::CommonFactoryContext& context,
+                   Event::Dispatcher& dispatcher, Upstream::ResourcePriority priority) PURE;
 
   std::unique_ptr<GenericConnPool>
   createConnPool(Upstream::ThreadLocalCluster& thread_local_cluster);
@@ -570,11 +533,12 @@ private:
   // Handle an upstream request aborted due to a local timeout.
   void onSoftPerTryTimeout();
   void onSoftPerTryTimeout(UpstreamRequest& upstream_request);
-  void onUpstreamTimeoutAbort(StreamInfo::ResponseFlag response_flag, absl::string_view details);
+  void onUpstreamTimeoutAbort(StreamInfo::CoreResponseFlag response_flag,
+                              absl::string_view details);
   // Handle an "aborted" upstream request, meaning we didn't see response
   // headers (e.g. due to a reset). Handles recording stats and responding
   // downstream if appropriate.
-  void onUpstreamAbort(Http::Code code, StreamInfo::ResponseFlag response_flag,
+  void onUpstreamAbort(Http::Code code, StreamInfo::CoreResponseFlag response_flag,
                        absl::string_view body, bool dropped, absl::string_view details);
   void onUpstreamComplete(UpstreamRequest& upstream_request);
   // Reset all in-flight upstream requests.
@@ -586,6 +550,7 @@ private:
   void sendNoHealthyUpstreamResponse();
   bool setupRedirect(const Http::ResponseHeaderMap& headers);
   bool convertRequestHeadersForInternalRedirect(Http::RequestHeaderMap& downstream_headers,
+                                                const Http::ResponseHeaderMap& upstream_headers,
                                                 const Http::HeaderEntry& internal_redirect,
                                                 uint64_t status_code);
   void updateOutlierDetection(Upstream::Outlier::Result result, UpstreamRequest& upstream_request,
@@ -597,10 +562,15 @@ private:
   void handleNon5xxResponseHeaders(absl::optional<Grpc::Status::GrpcStatus> grpc_status,
                                    UpstreamRequest& upstream_request, bool end_stream,
                                    uint64_t grpc_to_http_status);
-  Http::Context& httpContext() { return config_.http_context_; }
+  Http::Context& httpContext() { return config_->http_context_; }
+  bool checkDropOverload(Upstream::ThreadLocalCluster& cluster,
+                         std::function<void(Http::ResponseHeaderMap&)>& modify_headers);
+  // Process Orca Load Report if necessary (e.g. cluster has lrsReportMetricNames).
+  void maybeProcessOrcaLoadReport(const Envoy::Http::HeaderMap& headers_or_trailers,
+                                  UpstreamRequest& upstream_request);
 
   RetryStatePtr retry_state_;
-  FilterConfig& config_;
+  const FilterConfigSharedPtr config_;
   Http::StreamDecoderFilterCallbacks* callbacks_{};
   RouteConstSharedPtr route_;
   const RouteEntry* route_entry_{};
@@ -609,7 +579,7 @@ private:
   const VirtualCluster* request_vcluster_{};
   RouteStatsContextOptRef route_stats_context_;
   Event::TimerPtr response_timeout_;
-  FilterUtility::TimeoutData timeout_;
+  TimeoutData timeout_;
   std::list<UpstreamRequestPtr> upstream_requests_;
   FilterStats stats_;
   // Tracks which upstream request "wins" and will have the corresponding
@@ -639,6 +609,8 @@ private:
   uint32_t pending_retries_{0};
   Http::Code timeout_response_code_ = Http::Code::GatewayTimeout;
   FilterUtility::HedgingParams hedging_params_;
+  Http::StreamFilterSidestreamWatermarkCallbacks watermark_callbacks_;
+  std::weak_ptr<OrcaLoadReportCallbacks> orca_load_report_callbacks_;
   bool grpc_request_ : 1;
   bool exclude_http_code_stats_ : 1;
   bool downstream_response_started_ : 1;
@@ -648,6 +620,11 @@ private:
   bool include_timeout_retry_header_in_request_ : 1;
   bool request_buffer_overflowed_ : 1;
   const bool streaming_shadows_ : 1;
+  const bool allow_multiplexed_upstream_half_close_ : 1;
+  bool upstream_request_started_ : 1;
+  // Indicate that ORCA report is received to process it only once in either response headers or
+  // trailers.
+  bool orca_load_report_received_ : 1;
 };
 
 class ProdFilter : public Filter {
@@ -660,8 +637,8 @@ private:
                                  const Upstream::ClusterInfo& cluster,
                                  const VirtualCluster* vcluster,
                                  RouteStatsContextOptRef route_stats_context,
-                                 Runtime::Loader& runtime, Random::RandomGenerator& random,
-                                 Event::Dispatcher& dispatcher, TimeSource& time_source,
+                                 Server::Configuration::CommonFactoryContext& context,
+                                 Event::Dispatcher& dispatcher,
                                  Upstream::ResourcePriority priority) override;
 };
 

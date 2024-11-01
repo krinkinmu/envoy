@@ -1,5 +1,6 @@
 package io.envoyproxy.envoymobile
 
+import android.util.Pair
 import io.envoyproxy.envoymobile.engine.EnvoyConfiguration
 import io.envoyproxy.envoymobile.engine.EnvoyConfiguration.TrustChainVerification
 import io.envoyproxy.envoymobile.engine.EnvoyEngine
@@ -10,186 +11,48 @@ import io.envoyproxy.envoymobile.engine.types.EnvoyKeyValueStore
 import io.envoyproxy.envoymobile.engine.types.EnvoyStringAccessor
 import java.util.UUID
 
-/** Envoy engine configuration. */
-sealed class BaseConfiguration
-
-/** The standard configuration. */
-class Standard : BaseConfiguration()
-
-/**
- * The configuration based off a custom yaml.
- *
- * @param yaml the custom config.
- */
-class Custom(val yaml: String) : BaseConfiguration()
-
-/**
- * Builder for generating the xDS configuration for the Envoy Mobile engine. xDS is a protocol for
- * dynamic configuration of Envoy instances, more information can be found in
- * https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol.
- *
- * This class is typically used as input to the EngineBuilder's setXds() method.
- */
-open class XdsBuilder(internal val xdsServerAddress: String, internal val xdsServerPort: Int) {
-  companion object {
-    private const val DEFAULT_JWT_TOKEN_LIFETIME_IN_SECONDS: Int = 60 * 60 * 24 * 90 // 90 days
-    private const val DEFAULT_XDS_TIMEOUT_IN_SECONDS: Int = 5
-  }
-
-  internal var authHeader: String? = null
-  internal var authToken: String? = null
-  internal var jwtToken: String? = null
-  internal var jwtTokenLifetimeInSeconds: Int = DEFAULT_JWT_TOKEN_LIFETIME_IN_SECONDS
-  internal var sslRootCerts: String? = null
-  internal var sni: String? = null
-  internal var rtdsResourceName: String? = null
-  internal var rtdsTimeoutInSeconds: Int = DEFAULT_XDS_TIMEOUT_IN_SECONDS
-  internal var enableCds: Boolean = false
-  internal var cdsResourcesLocator: String? = null
-  internal var cdsTimeoutInSeconds: Int = DEFAULT_XDS_TIMEOUT_IN_SECONDS
-
-  /**
-   * Sets the authentication HTTP header and token value for authenticating with the xDS management
-   * server.
-   *
-   * @param header The HTTP authentication header.
-   * @param token The authentication token to be sent in the header.
-   * @return this builder.
-   */
-  fun setAuthenticationToken(header: String, token: String): XdsBuilder {
-    this.authHeader = header
-    this.authToken = token
-    return this
-  }
-
-  /**
-   * Sets JWT as the authentication method to the xDS management server, using the given token.
-   *
-   * @param token The JWT token used to authenticate the client to the xDS management server.
-   * @param tokenLifetimeInSeconds <optional> The lifetime of the JWT token, in seconds. If none
-   *   (or 0) is specified, then defaultJwtTokenLifetimeSeconds is used.
-   * @return this builder.
-   */
-  fun setJwtAuthenticationToken(
-    token: String,
-    tokenLifetimeInSeconds: Int = DEFAULT_JWT_TOKEN_LIFETIME_IN_SECONDS
-  ): XdsBuilder {
-    this.jwtToken = token
-    this.jwtTokenLifetimeInSeconds =
-      if (tokenLifetimeInSeconds > 0) tokenLifetimeInSeconds
-      else DEFAULT_JWT_TOKEN_LIFETIME_IN_SECONDS
-    return this
-  }
-
-  /**
-   * Sets the PEM-encoded server root certificates used to negotiate the TLS handshake for the gRPC
-   * connection. If no root certs are specified, the operating system defaults are used.
-   *
-   * @param rootCerts The PEM-encoded server root certificates.
-   * @return this builder.
-   */
-  fun setSslRootCerts(rootCerts: String): XdsBuilder {
-    this.sslRootCerts = rootCerts
-    return this
-  }
-
-  /**
-   * Sets the SNI (https://datatracker.ietf.org/doc/html/rfc6066#section-3) on the TLS handshake and
-   * the authority HTTP header. If not set, the SNI is set by default to the xDS server address and
-   * the authority HTTP header is not set.
-   *
-   * @param sni The SNI value.
-   * @return this builder.
-   */
-  fun setSni(sni: String): XdsBuilder {
-    this.sni = sni
-    return this
-  }
-
-  /**
-   * Adds Runtime Discovery Service (RTDS) to the Runtime layers of the Bootstrap configuration, to
-   * retrieve dynamic runtime configuration via the xDS management server.
-   *
-   * @param resourceName The runtime config resource to subscribe to.
-   * @param timeoutInSeconds <optional> specifies the `initial_fetch_timeout` field on the
-   *   api.v3.core.ConfigSource. Unlike the ConfigSource default of 15s, we set a default fetch
-   *   timeout value of 5s, to prevent mobile app initialization from stalling. The default
-   *   parameter value may change through the course of experimentation and no assumptions should be
-   *   made of its exact value.
-   * @return this builder.
-   */
-  fun addRuntimeDiscoveryService(
-    resourceName: String,
-    timeoutInSeconds: Int = DEFAULT_XDS_TIMEOUT_IN_SECONDS
-  ): XdsBuilder {
-    this.rtdsResourceName = resourceName
-    this.rtdsTimeoutInSeconds = timeoutOrXdsDefault(timeoutInSeconds)
-    return this
-  }
-
-  /**
-   * Adds the Cluster Discovery Service (CDS) configuration for retrieving dynamic cluster resources
-   * via the xDS management server.
-   *
-   * @param cdsResourcesLocator <optional> the xdstp:// URI for subscribing to the cluster
-   *   resources. If not using xdstp, then `cds_resources_locator` should be set to the empty
-   *   string.
-   * @param timeoutInSeconds <optional> specifies the `initial_fetch_timeout` field on the
-   *   api.v3.core.ConfigSource. Unlike the ConfigSource default of 15s, we set a default fetch
-   *   timeout value of 5s, to prevent mobile app initialization from stalling. The default
-   *   parameter value may change through the course of experimentation and no assumptions should be
-   *   made of its exact value.
-   * @return this builder.
-   */
-  public fun addClusterDiscoveryService(
-    cdsResourcesLocator: String? = null,
-    timeoutInSeconds: Int = DEFAULT_XDS_TIMEOUT_IN_SECONDS
-  ): XdsBuilder {
-    this.enableCds = true
-    this.cdsResourcesLocator = cdsResourcesLocator
-    this.cdsTimeoutInSeconds = timeoutOrXdsDefault(timeoutInSeconds)
-    return this
-  }
-
-  private fun timeoutOrXdsDefault(timeout: Int): Int {
-    return if (timeout > 0) timeout else DEFAULT_XDS_TIMEOUT_IN_SECONDS
-  }
-}
-
 /** Builder used for creating and running a new `Engine` instance. */
-open class EngineBuilder(private val configuration: BaseConfiguration = Standard()) {
+open class EngineBuilder() {
   protected var onEngineRunning: (() -> Unit) = {}
-  protected var logger: ((String) -> Unit)? = null
+  protected var logger: ((LogLevel, String) -> Unit)? = null
   protected var eventTracker: ((Map<String, String>) -> Unit)? = null
   protected var enableProxying = false
   private var runtimeGuards = mutableMapOf<String, Boolean>()
   private var engineType: () -> EnvoyEngine = {
-    EnvoyEngineImpl(onEngineRunning, logger, eventTracker)
+    EnvoyEngineImpl(
+      onEngineRunning,
+      { level, msg -> logger?.let { it(LogLevel.from(level), msg) } },
+      eventTracker
+    )
   }
   private var logLevel = LogLevel.INFO
-  private var grpcStatsDomain: String? = null
-  private var connectTimeoutSeconds = 30
+  private var connectTimeoutSeconds = 10
   private var dnsRefreshSeconds = 60
   private var dnsFailureRefreshSecondsBase = 2
   private var dnsFailureRefreshSecondsMax = 10
-  private var dnsQueryTimeoutSeconds = 25
+  private var dnsQueryTimeoutSeconds = 5
   private var dnsMinRefreshSeconds = 60
   private var dnsPreresolveHostnames = listOf<String>()
   private var enableDNSCache = false
   private var dnsCacheSaveIntervalSeconds = 1
+  // null means the DNS resolver will try indefinitely until it succeeds.
+  private var dnsNumRetries: Int? = null
   private var enableDrainPostDnsRefresh = false
   internal var enableHttp3 = true
+  internal var useCares = false
+  internal var caresFallbackResolvers = mutableListOf<Pair<String, Int>>()
   private var http3ConnectionOptions = ""
   private var http3ClientConnectionOptions = ""
   private var quicHints = mutableMapOf<String, Int>()
+  private var quicCanonicalSuffixes = mutableListOf<String>()
   private var enableGzipDecompression = true
   private var enableBrotliDecompression = false
+  private var numTimeoutsToTriggerPortMigration = 0
   private var enableSocketTagging = false
   private var enableInterfaceBinding = false
   private var h2ConnectionKeepaliveIdleIntervalMilliseconds = 1
   private var h2ConnectionKeepaliveTimeoutSeconds = 10
   private var maxConnectionsPerHost = 7
-  private var statsFlushSeconds = 60
   private var streamIdleTimeoutSeconds = 15
   private var perTryIdleTimeoutSeconds = 15
   private var appVersion = "unspecified"
@@ -199,49 +62,18 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
   private var nativeFilterChain = mutableListOf<EnvoyNativeFilterConfig>()
   private var stringAccessors = mutableMapOf<String, EnvoyStringAccessor>()
   private var keyValueStores = mutableMapOf<String, EnvoyKeyValueStore>()
-  private var statsSinks = listOf<String>()
   private var enablePlatformCertificatesValidation = false
-  private var nodeId: String = ""
-  private var nodeRegion: String = ""
-  private var nodeZone: String = ""
-  private var nodeSubZone: String = ""
-  private var xdsBuilder: XdsBuilder? = null
+  private var upstreamTlsSni: String = ""
+  private var h3ConnectionKeepaliveInitialIntervalMilliseconds = 0
 
   /**
-   * Add a log level to use with Envoy.
+   * Sets a log level to use with Envoy.
    *
    * @param logLevel the log level to use with Envoy.
    * @return this builder.
    */
-  fun addLogLevel(logLevel: LogLevel): EngineBuilder {
+  fun setLogLevel(logLevel: LogLevel): EngineBuilder {
     this.logLevel = logLevel
-    return this
-  }
-
-  /**
-   * Specifies the domain (e.g. `example.com`) to use in the default gRPC stat sink to flush stats.
-   *
-   * Setting this value enables the gRPC stat sink, which periodically flushes stats via the gRPC
-   * MetricsService API. The flush interval is specified via addStatsFlushSeconds.
-   *
-   * @param grpcStatsDomain The domain to use for the gRPC stats sink.
-   * @return this builder.
-   */
-  fun addGrpcStatsDomain(grpcStatsDomain: String?): EngineBuilder {
-    this.grpcStatsDomain = grpcStatsDomain
-    return this
-  }
-
-  /**
-   * Adds additional stats sinks, in the form of the raw YAML/JSON configuration. Sinks added in
-   * this fashion will be included in addition to the gRPC stats sink that may be enabled via
-   * addGrpcStatsDomain.
-   *
-   * @param statsSinks Configurations of stat sinks to add.
-   * @return this builder.
-   */
-  fun addStatsSinks(statsSinks: List<String>): EngineBuilder {
-    this.statsSinks = statsSinks
     return this
   }
 
@@ -315,6 +147,18 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
   }
 
   /**
+   * Specifies the number of retries before the resolver gives up. If not specified, the resolver
+   * will retry indefinitely until it succeeds or the DNS query times out.
+   *
+   * @param dnsNumRetries the number of retries
+   * @return this builder
+   */
+  fun setDnsNumRetries(dnsNumRetries: Int): EngineBuilder {
+    this.dnsNumRetries = dnsNumRetries
+    return this
+  }
+
+  /**
    * Specify whether to drain connections after the resolution of a soft DNS refresh. A refresh may
    * be triggered directly via the Engine API, or as a result of a network status update provided by
    * the OS. Draining connections does not interrupt existing connections or requests, but will
@@ -366,6 +210,29 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
   }
 
   /**
+   * Specify whether to use c_ares for dns resolution. Defaults to false.
+   *
+   * @param useCares whether or not to use c_ares
+   * @return This builder.
+   */
+  fun useCares(useCares: Boolean): EngineBuilder {
+    this.useCares = useCares
+    return this
+  }
+
+  /**
+   * Add fallback resolver to c_ares.
+   *
+   * @param host ip address string
+   * @param port port for the resolver
+   * @return This builder.
+   */
+  fun addCaresFallbackResolver(host: String, port: Int): EngineBuilder {
+    this.caresFallbackResolvers.add(Pair(host, port))
+    return this
+  }
+
+  /**
    * Specify whether to do brotli response decompression or not. Defaults to false.
    *
    * @param enableBrotliDecompression whether or not to brotli decompress responses.
@@ -373,6 +240,18 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
    */
   fun enableBrotliDecompression(enableBrotliDecompression: Boolean): EngineBuilder {
     this.enableBrotliDecompression = enableBrotliDecompression
+    return this
+  }
+
+  /**
+   * Configure QUIC port migration. Defaults to disabled.
+   *
+   * @param numTimeoutsToTriggerPortMigration number of timeouts to trigger port migration. If 0,
+   *   port migration is disabled.
+   * @return This builder.
+   */
+  fun setNumTimeoutsToTriggerPortMigration(numTimeoutsToTriggerPortMigration: Int): EngineBuilder {
+    this.numTimeoutsToTriggerPortMigration = numTimeoutsToTriggerPortMigration
     return this
   }
 
@@ -449,17 +328,6 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
    */
   fun setMaxConnectionsPerHost(maxConnectionsPerHost: Int): EngineBuilder {
     this.maxConnectionsPerHost = maxConnectionsPerHost
-    return this
-  }
-
-  /**
-   * Add an interval at which to flush Envoy stats.
-   *
-   * @param statsFlushSeconds interval at which to flush Envoy stats.
-   * @return this builder.
-   */
-  fun addStatsFlushSeconds(statsFlushSeconds: Int): EngineBuilder {
-    this.statsFlushSeconds = statsFlushSeconds
     return this
   }
 
@@ -542,7 +410,7 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
    * @param closure: The closure to be called.
    * @return This builder.
    */
-  fun setLogger(closure: (String) -> Unit): EngineBuilder {
+  fun setLogger(closure: (LogLevel, String) -> Unit): EngineBuilder {
     this.logger = closure
     return this
   }
@@ -611,50 +479,25 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
   }
 
   /**
-   * Sets the node.id field in the Bootstrap configuration.
+   * Sets the upstream TLS socket's SNI override. If empty, no SNI override will be configured.
    *
-   * @param nodeId the node ID.
+   * @param sni the SNI.
    * @return this builder.
    */
-  fun setNodeId(nodeId: String): EngineBuilder {
-    this.nodeId = nodeId
+  fun setUpstreamTlsSni(sni: String): EngineBuilder {
+    this.upstreamTlsSni = sni
     return this
   }
 
   /**
-   * Sets the node.locality field in the Bootstrap configuration.
-   *
-   * @param region the region of the node locality.
-   * @param zone the zone of the node locality.
-   * @param subZone the sub-zone of the node locality.
-   * @return this builder.
-   */
-  fun setNodeLocality(region: String, zone: String, subZone: String): EngineBuilder {
-    this.nodeRegion = region
-    this.nodeZone = zone
-    this.nodeSubZone = subZone
-    return this
-  }
-
-  /**
-   * Sets the xDS configuration for the Envoy Mobile engine.
-   *
-   * @param xdsBuilder The XdsBuilder instance from which to construct the xDS configuration.
-   * @return this builder.
-   */
-  fun setXds(xdsBuilder: XdsBuilder): EngineBuilder {
-    this.xdsBuilder = xdsBuilder
-    return this
-  }
-
-  /**
-   * Set a runtime guard with the provided value.
+   * Adds a runtime guard for the `envoy.reloadable_features.<guard>`. For example if the runtime
+   * guard is `envoy.reloadable_features.use_foo`, the guard name is `use_foo`.
    *
    * @param name the name of the runtime guard, e.g. test_feature_false.
    * @param value the value for the runtime guard.
    * @return This builder.
    */
-  fun setRuntimeGuard(name: String, value: Boolean): EngineBuilder {
+  fun addRuntimeGuard(name: String, value: Boolean): EngineBuilder {
     this.runtimeGuards.put(name, value)
     return this
   }
@@ -672,6 +515,22 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
   }
 
   /**
+   * Add a host suffix that's known to speak QUIC.
+   *
+   * @param suffix the suffix string.
+   * @return This builder.
+   */
+  fun addQuicCanonicalSuffix(suffix: String): EngineBuilder {
+    this.quicCanonicalSuffixes.add(suffix)
+    return this
+  }
+
+  fun addH3ConnectionKeepaliveInitialIntervalMilliseconds(interval: Int): EngineBuilder {
+    this.h3ConnectionKeepaliveInitialIntervalMilliseconds = interval
+    return this
+  }
+
+  /**
    * Builds and runs a new Engine instance with the provided configuration.
    *
    * @return A new instance of Envoy.
@@ -680,7 +539,6 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
   fun build(): Engine {
     val engineConfiguration =
       EnvoyConfiguration(
-        grpcStatsDomain,
         connectTimeoutSeconds,
         dnsRefreshSeconds,
         dnsFailureRefreshSecondsBase,
@@ -690,19 +548,22 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
         dnsPreresolveHostnames,
         enableDNSCache,
         dnsCacheSaveIntervalSeconds,
+        dnsNumRetries ?: -1,
         enableDrainPostDnsRefresh,
         enableHttp3,
+        useCares,
         http3ConnectionOptions,
         http3ClientConnectionOptions,
         quicHints,
+        quicCanonicalSuffixes,
         enableGzipDecompression,
         enableBrotliDecompression,
+        numTimeoutsToTriggerPortMigration,
         enableSocketTagging,
         enableInterfaceBinding,
         h2ConnectionKeepaliveIdleIntervalMilliseconds,
         h2ConnectionKeepaliveTimeoutSeconds,
         maxConnectionsPerHost,
-        statsFlushSeconds,
         streamIdleTimeoutSeconds,
         perTryIdleTimeoutSeconds,
         appVersion,
@@ -712,36 +573,14 @@ open class EngineBuilder(private val configuration: BaseConfiguration = Standard
         platformFilterChain,
         stringAccessors,
         keyValueStores,
-        statsSinks,
         runtimeGuards,
         enablePlatformCertificatesValidation,
-        xdsBuilder?.rtdsResourceName,
-        xdsBuilder?.rtdsTimeoutInSeconds ?: 0,
-        xdsBuilder?.xdsServerAddress,
-        xdsBuilder?.xdsServerPort ?: 0,
-        xdsBuilder?.authHeader,
-        xdsBuilder?.authToken,
-        xdsBuilder?.jwtToken,
-        xdsBuilder?.jwtTokenLifetimeInSeconds ?: 0,
-        xdsBuilder?.sslRootCerts,
-        xdsBuilder?.sni,
-        nodeId,
-        nodeRegion,
-        nodeZone,
-        nodeSubZone,
-        xdsBuilder?.cdsResourcesLocator,
-        xdsBuilder?.cdsTimeoutInSeconds ?: 0,
-        xdsBuilder?.enableCds ?: false,
+        upstreamTlsSni,
+        caresFallbackResolvers,
+        h3ConnectionKeepaliveInitialIntervalMilliseconds,
       )
 
-    return when (configuration) {
-      is Custom -> {
-        EngineImpl(engineType(), engineConfiguration, configuration.yaml, logLevel)
-      }
-      is Standard -> {
-        EngineImpl(engineType(), engineConfiguration, logLevel)
-      }
-    }
+    return EngineImpl(engineType(), engineConfiguration, logLevel)
   }
 
   /**

@@ -14,12 +14,9 @@ public interface EnvoyEngine {
    *
    * @param callbacks The callbacks for receiving callbacks from the stream.
    * @param explicitFlowControl Whether explicit flow control will be enabled for this stream.
-   * @param minDeliverySize If nonzero, indicates the smallest number of response body bytes which
-   *     should be delivered sans end stream.
    * @return A stream that may be used for sending data.
    */
-  EnvoyHTTPStream startStream(EnvoyHTTPCallbacks callbacks, boolean explicitFlowControl,
-                              long minDeliverySize);
+  EnvoyHTTPStream startStream(EnvoyHTTPCallbacks callbacks, boolean explicitFlowControl);
 
   /**
    * Terminates the running engine.
@@ -34,17 +31,6 @@ public interface EnvoyEngine {
    * @param envoyConfiguration The EnvoyConfiguration used to start Envoy.
    */
   void performRegistration(EnvoyConfiguration envoyConfiguration);
-
-  /**
-   * Run the Envoy engine with the provided yaml string and log level.
-   *
-   * This does not perform registration, and performRegistration() may need to be called first.
-   *
-   * @param configurationYAML The configuration yaml with which to start Envoy.
-   * @param logLevel          The log level to use when starting Envoy.
-   * @return A status indicating if the action was successful.
-   */
-  EnvoyStatus runWithYaml(String configurationYAML, String logLevel);
 
   /**
    * Run the Envoy engine with the provided EnvoyConfiguration and log level.
@@ -69,13 +55,6 @@ public interface EnvoyEngine {
 
   int registerStringAccessor(String accessor_name, EnvoyStringAccessor accessor);
 
-  /**
-   * Flush the stats sinks outside of a flushing interval.
-   * Note: stat flushing is done asynchronously, this function will never block.
-   * This is a noop if called before the underlying EnvoyEngine has started.
-   */
-  void flushStats();
-
   String dumpStats();
 
   /**
@@ -84,12 +63,19 @@ public interface EnvoyEngine {
   void resetConnectivityState();
 
   /**
-   * Update the network interface to the preferred network for opening new
-   * streams.
-   *
-   * @param network The network to be preferred for new streams.
+   * A callback into the Envoy Engine when the default network is available.
    */
-  void setPreferredNetwork(EnvoyNetworkType network);
+  void onDefaultNetworkAvailable();
+
+  /**
+   * A callback into the Envoy Engine when the default network type was changed.
+   */
+  void onDefaultNetworkChanged(EnvoyNetworkType network);
+
+  /**
+   * A callback into the Envoy Engine when the default network is unavailable.
+   */
+  void onDefaultNetworkUnavailable();
 
   /**
    * Update proxy settings.
@@ -103,12 +89,12 @@ public interface EnvoyEngine {
   /*
    * These are the available log levels for Envoy Mobile.
    */
-  public enum LogLevel { TRACE, DEBUG, INFO, WARN, ERR, CRITICAL, OFF }
+  enum LogLevel { TRACE, DEBUG, INFO, WARN, ERR, CRITICAL, OFF }
 
   /**
    * Set the log level for Envoy mobile
    *
    * @param log_level the verbosity of logging Envoy should use.
    */
-  public void setLogLevel(LogLevel log_level);
+  void setLogLevel(LogLevel log_level);
 }

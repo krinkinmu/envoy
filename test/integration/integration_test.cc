@@ -525,6 +525,29 @@ TEST_P(IntegrationTest, EnvoyProxying1xxWithDecodeDataPause) {
   testEnvoyProxying1xx(true);
 }
 
+TEST_P(IntegrationTest, RouterRetryOnResetBeforeRequestAfterHeaders) {
+  testRouterRetryOnResetBeforeRequestAfterHeaders();
+}
+
+TEST_P(IntegrationTest, RouterRetryOnResetBeforeRequestBeforeHeaders) {
+  config_helper_.addConfigModifier([](envoy::config::bootstrap::v3::Bootstrap& bootstrap) {
+    auto* static_resources = bootstrap.mutable_static_resources();
+    auto* cluster = static_resources->mutable_clusters(0);
+    // Ensure we only have one connection upstream, one request active at a time.
+    ConfigHelper::HttpProtocolOptions protocol_options;
+    protocol_options.mutable_common_http_protocol_options()
+        ->mutable_max_requests_per_connection()
+        ->set_value(1);
+    protocol_options.mutable_use_downstream_protocol_config();
+    auto* circuit_breakers = cluster->mutable_circuit_breakers();
+    circuit_breakers->add_thresholds()->mutable_max_connections()->set_value(1);
+    ConfigHelper::setProtocolOptions(*bootstrap.mutable_static_resources()->mutable_clusters(0),
+                                     protocol_options);
+  });
+  config_helper_.prependFilter("{ name: buffer-continue-filter }", false);
+  testRouterRetryOnResetBeforeRequestBeforeHeaders();
+}
+
 // Test the x-envoy-is-timeout-retry header is set to false for retries that are not
 // initiated by timeouts.
 TEST_P(IntegrationTest, RouterIsTimeoutRetryHeader) {
@@ -1077,6 +1100,24 @@ TEST_P(IntegrationTest, MissingDelimiter) {
   EXPECT_THAT(log, Not(HasSubstr("DC")));
 }
 
+TEST_P(IntegrationTest, ConnectionTermination) {
+  useAccessLog("%RESPONSE_FLAGS% %RESPONSE_CODE_DETAILS%");
+  initialize();
+  std::string response;
+  auto tcp_client = makeTcpConnection(lookupPort("http"));
+  ASSERT_TRUE(tcp_client->write("GET / HTTP/1.1\r\nHost: host\r\n\r\n"));
+
+  FakeRawConnectionPtr fake_upstream_connection;
+  ASSERT_TRUE(fake_upstreams_[0]->waitForRawConnection(fake_upstream_connection));
+  std::string data;
+  ASSERT_TRUE(fake_upstream_connection->waitForData(
+      FakeRawConnection::waitForInexactMatch("\r\n\r\n"), &data));
+  tcp_client->close();
+  std::string log = waitForAccessLog(access_log_name_);
+  EXPECT_THAT(log, HasSubstr("DC"));
+  EXPECT_THAT(log, HasSubstr("downstream_remote_disconnect"));
+}
+
 TEST_P(IntegrationTest, InvalidCharacterInFirstline) {
   initialize();
   std::string response;
@@ -1558,23 +1599,6 @@ TEST_P(IntegrationTest, AbsolutePathWithMixedScheme) {
   EXPECT_THAT(response, StartsWith("HTTP/1.1 301"));
 }
 
-TEST_P(IntegrationTest, AbsolutePathWithMixedSchemeLegacy) {
-  config_helper_.addRuntimeOverride(
-      "envoy.reloadable_features.allow_absolute_url_with_mixed_scheme", "false");
-  config_helper_.addRuntimeOverride("envoy.reloadable_features.handle_uppercase_scheme", "false");
-
-  // Mixed scheme requests will be rejected
-  auto host = config_helper_.createVirtualHost("www.namewithport.com:1234", "/");
-  host.set_require_tls(envoy::config::route::v3::VirtualHost::ALL);
-  config_helper_.addVirtualHost(host);
-  initialize();
-  std::string response;
-  sendRawHttpAndWaitForResponse(
-      lookupPort("http"), "GET hTtp://www.namewithport.com:1234 HTTP/1.1\r\nHost: host\r\n\r\n",
-      &response, true);
-  EXPECT_THAT(response, StartsWith("HTTP/1.1 400"));
-}
-
 TEST_P(IntegrationTest, AbsolutePathWithoutPort) {
   // Add a restrictive default match, to avoid the request hitting the * / catchall.
   config_helper_.setDefaultHostAndRoute("foo.com", "/found");
@@ -1593,6 +1617,7 @@ TEST_P(IntegrationTest, AbsolutePathWithoutPort) {
 
 // Ensure that connect behaves the same with allow_absolute_url enabled and without
 TEST_P(IntegrationTest, Connect) {
+  setListenersBoundTimeout(3 * TestUtility::DefaultTimeout);
   const std::string& request = "CONNECT www.somewhere.com:80 HTTP/1.1\r\n\r\n";
   config_helper_.addConfigModifier([&](envoy::config::bootstrap::v3::Bootstrap& bootstrap) -> void {
     // Clone the whole listener.

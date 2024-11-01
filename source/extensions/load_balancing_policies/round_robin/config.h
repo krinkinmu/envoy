@@ -5,7 +5,6 @@
 #include "envoy/upstream/load_balancer.h"
 
 #include "source/common/common/logger.h"
-#include "source/common/upstream/load_balancer_impl.h"
 #include "source/extensions/load_balancing_policies/common/factory_base.h"
 
 namespace Envoy {
@@ -58,9 +57,8 @@ class Factory : public Common::FactoryBase<RoundRobinLbProto, RoundRobinCreator>
 public:
   Factory() : FactoryBase("envoy.load_balancing_policies.round_robin") {}
 
-  Upstream::LoadBalancerConfigPtr loadConfig(const Protobuf::Message& config,
-                                             ProtobufMessage::ValidationVisitor&) override {
-
+  Upstream::LoadBalancerConfigPtr loadConfig(Server::Configuration::ServerFactoryContext&,
+                                             const Protobuf::Message& config) override {
     auto active_or_legacy = Common::ActiveOrLegacy<RoundRobinLbProto, ClusterProto>::get(&config);
     ASSERT(active_or_legacy.hasLegacy() || active_or_legacy.hasActive());
 

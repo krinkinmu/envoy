@@ -224,10 +224,8 @@ public:
                   type: EDS
                   eds_cluster_config:
                     eds_config:
-                      resource_api_version: V3
                       api_config_source:
                         api_type: GRPC
-                        transport_api_version: V3
                         grpc_services:
                           envoy_grpc:
                             cluster_name: "eds-cluster"
@@ -1341,8 +1339,9 @@ TEST_P(HeaderIntegrationTest, PathWithEscapedSlashesRedirected) {
                                    });
 }
 
-// Validates TE header is forwarded if it contains a supported value
+// Validates legacy TE handling: TE header is forwarded if it contains a supported value
 TEST_P(HeaderIntegrationTest, TestTeHeaderPassthrough) {
+  config_helper_.addRuntimeOverride("envoy.reloadable_features.sanitize_te", "false");
   initializeFilter(HeaderMode::Append, false);
   performRequest(
       Http::TestRequestHeaderMapImpl{
@@ -1375,8 +1374,9 @@ TEST_P(HeaderIntegrationTest, TestTeHeaderPassthrough) {
       });
 }
 
-// Validates TE header is stripped if it contains an unsupported value
+// Validates legacy TE handling: that TE header stripped if it contains an unsupported value.
 TEST_P(HeaderIntegrationTest, TestTeHeaderSanitized) {
+  config_helper_.addRuntimeOverride("envoy.reloadable_features.sanitize_te", "false");
   initializeFilter(HeaderMode::Append, false);
   performRequest(
       Http::TestRequestHeaderMapImpl{

@@ -53,7 +53,7 @@ public:
                        Grpc::GrpcServiceConfigWithHashKey config_with_hash_key)
       : config_(std::move(config)), config_with_hash_key_(config_with_hash_key),
         factory_context_(factory_context), quota_buckets_(quota_buckets), client_(client),
-        time_source_(factory_context.mainThreadDispatcher().timeSource()) {
+        time_source_(factory_context.serverFactoryContext().mainThreadDispatcher().timeSource()) {
     createMatcher();
   }
 
@@ -87,12 +87,40 @@ private:
   // Create the matcher factory and matcher.
   void createMatcher();
   // Create a new bucket and add it to the quota bucket cache.
-  void createNewBucket(const BucketId& bucket_id, size_t id);
+  void createNewBucket(const BucketId& bucket_id, const RateLimitOnMatchAction& match_action,
+                       size_t id);
   // Send the report to RLQS server immediately.
   Http::FilterHeadersStatus sendImmediateReport(const size_t bucket_id,
                                                 const RateLimitOnMatchAction& match_action);
 
-  Http::FilterHeadersStatus processCachedBucket(size_t bucket_id);
+  Http::FilterHeadersStatus setUsageAndResponseFromAction(const BucketAction& action,
+                                                          size_t bucket_id);
+
+  Http::FilterHeadersStatus processCachedBucket(size_t bucket_id,
+                                                const RateLimitOnMatchAction& match_action);
+  // TODO(tyxia) Build the customized response based on `DenyResponseSettings`.
+  // Send a deny response and update quota usage if provided.
+  Http::FilterHeadersStatus sendDenyResponse(QuotaUsage* quota_usage = nullptr) {
+    callbacks_->sendLocalReply(Envoy::Http::Code::TooManyRequests, "", nullptr, absl::nullopt, "");
+    callbacks_->streamInfo().setResponseFlag(StreamInfo::CoreResponseFlag::RateLimited);
+    if (quota_usage)
+      quota_usage->num_requests_denied++;
+    return Http::FilterHeadersStatus::StopIteration;
+  }
+
+  // Send an allow response and update quota usage if provided.
+  Http::FilterHeadersStatus sendAllowResponse(QuotaUsage* quota_usage = nullptr) {
+    if (quota_usage)
+      quota_usage->num_requests_allowed++;
+    return Http::FilterHeadersStatus::Continue;
+  }
+
+  // Get the FilterHeadersStatus to return when a selected bucket has an expired
+  // assignment. Note: this does not actually remove the expired entity from the
+  // cache.
+  Http::FilterHeadersStatus processExpiredBucket(size_t bucket_id,
+                                                 const RateLimitOnMatchAction& match_action);
+
   FilterConfigConstSharedPtr config_;
   Grpc::GrpcServiceConfigWithHashKey config_with_hash_key_;
   Server::Configuration::FactoryContext& factory_context_;
@@ -105,8 +133,6 @@ private:
   BucketsCache& quota_buckets_;
   ThreadLocalClient& client_;
   TimeSource& time_source_;
-
-  bool initiating_call_{};
 };
 
 } // namespace RateLimitQuota

@@ -16,7 +16,9 @@
 #include "source/common/config/config_provider_impl.h"
 #include "source/common/config/null_grpc_mux_impl.h"
 #include "source/common/protobuf/message_validator_impl.h"
+#include "source/common/router/route_provider_manager.h"
 #include "source/common/router/scoped_rds.h"
+#include "source/common/router/static_route_provider_impl.h"
 
 #include "test/mocks/config/mocks.h"
 #include "test/mocks/matcher/mocks.h"
@@ -331,7 +333,7 @@ dynamic_scoped_route_configs:
 
 class ScopedRdsTest : public ScopedRoutesTestBase {
 protected:
-  void setup(const OptionalHttpFilters optional_http_filters = OptionalHttpFilters()) {
+  void setup() {
     ON_CALL(server_factory_context_.cluster_manager_, adsMux())
         .WillByDefault(Return(std::make_shared<::Envoy::Config::NullGrpcMuxImpl>()));
 
@@ -400,8 +402,7 @@ scope_key_builder:
     provider_ = config_provider_manager_->createXdsConfigProvider(
         scoped_routes_config.scoped_rds(), server_factory_context_, context_init_manager_, "foo.",
         ScopedRoutesConfigProviderManagerOptArg(scoped_routes_config.name(),
-                                                scoped_routes_config.rds_config_source(),
-                                                optional_http_filters));
+                                                scoped_routes_config.rds_config_source()));
     srds_subscription_ = server_factory_context_.cluster_manager_.subscription_factory_.callbacks_;
   }
 
@@ -568,47 +569,6 @@ key:
   EXPECT_EQ(2UL,
             server_factory_context_.store_.counter("foo.scoped_rds.foo_scoped_routes.config_reload")
                 .value());
-}
-
-// Test ignoring the optional unknown factory in the per-virtualhost typed config.
-TEST_F(ScopedRdsTest, OptionalUnknownFactoryForPerVirtualHostTypedConfig) {
-  // TODO(wbpcode): This test should be removed once the deprecated flag is removed.
-  TestScopedRuntime scoped_runtime;
-  scoped_runtime.mergeValues(
-      {{"envoy.reloadable_features.ignore_optional_option_from_hcm_for_route_config", "false"}});
-
-  OptionalHttpFilters optional_http_filters;
-  optional_http_filters.insert("filter.unknown");
-  setup(optional_http_filters);
-  init_watcher_.expectReady();
-  const std::string config_yaml = R"EOF(
-name: foo_scope
-route_configuration_name: foo_routes
-key:
-  fragments:
-    - string_key: x-foo-key
-)EOF";
-
-  const auto resource = parseScopedRouteConfigurationFromYaml(config_yaml);
-  const auto decoded_resources = TestUtility::decodeResources({resource});
-
-  context_init_manager_.initialize(init_watcher_);
-  EXPECT_TRUE(srds_subscription_->onConfigUpdate(decoded_resources.refvec_, "1").ok());
-
-  constexpr absl::string_view route_config_tmpl = R"EOF(
-      name: {}
-      virtual_hosts:
-      - name: test
-        domains: ["*"]
-        routes:
-        - match: {{ prefix: "/" }}
-          route: {{ cluster: bluh }}
-        typed_per_filter_config:
-          filter.unknown:
-            "@type": type.googleapis.com/google.protobuf.Struct
-)EOF";
-
-  pushRdsConfig({"foo_routes"}, "111", route_config_tmpl);
 }
 
 // Tests that multiple uniquely named non-conflict resources are allowed in config updates.
@@ -1258,21 +1218,6 @@ dynamic_scoped_route_configs:
   EXPECT_THAT(expected_config_dump, ProtoEq(scoped_routes_config_dump7));
 }
 
-TEST_F(ScopedRdsTest, DeltaStaticConfigProviderOnly) {
-  // Use match all regex due to lack of distinctive matchable output for
-  // coverage test.
-  EXPECT_DEATH(config_provider_manager_->createStaticConfigProvider(
-                   parseScopedRouteConfigurationFromYaml(R"EOF(
-name: dynamic-foo
-route_configuration_name: static-foo-route-config
-key:
-  fragments: { string_key: "172.30.30.10" }
-)EOF"),
-                   server_factory_context_,
-                   Envoy::Config::ConfigProviderManager::NullOptionalArg()),
-               ".*");
-}
-
 // Tests whether scope key conflict with updated scopes is ignored.
 TEST_F(ScopedRdsTest, IgnoreConflictWithUpdatedScopeDelta) {
   setup();
@@ -1814,8 +1759,7 @@ scope_key_builder:
   provider_ = config_provider_manager_->createXdsConfigProvider(
       scoped_routes_config.scoped_rds(), server_factory_context_, context_init_manager_, "foo.",
       ScopedRoutesConfigProviderManagerOptArg(scoped_routes_config.name(),
-                                              scoped_routes_config.rds_config_source(),
-                                              OptionalHttpFilters()));
+                                              scoped_routes_config.rds_config_source()));
   srds_subscription_ = server_factory_context_.cluster_manager_.subscription_factory_.callbacks_;
 
   const std::string config_yaml = R"EOF(

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "envoy/http/codes.h"
+#include "envoy/stream_info/stream_info.h"
 
 #include "source/common/common/assert.h"
 #include "source/common/common/enum_to_int.h"
@@ -11,12 +12,33 @@
 #include "source/common/http/codes.h"
 #include "source/common/http/header_utility.h"
 #include "source/common/router/config_impl.h"
+#include "source/common/stream_info/uint32_accessor_impl.h"
 #include "source/extensions/filters/http/ratelimit/ratelimit_headers.h"
 
 namespace Envoy {
 namespace Extensions {
 namespace HttpFilters {
 namespace RateLimitFilter {
+
+namespace {
+constexpr absl::string_view HitsAddendFilterStateKey = "envoy.ratelimit.hits_addend";
+
+class HitsAddendObjectFactory : public StreamInfo::FilterState::ObjectFactory {
+public:
+  std::string name() const override { return std::string(HitsAddendFilterStateKey); }
+  std::unique_ptr<StreamInfo::FilterState::Object>
+  createFromBytes(absl::string_view data) const override {
+    uint32_t hits_addend = 0;
+    if (absl::SimpleAtoi(data, &hits_addend)) {
+      return std::make_unique<StreamInfo::UInt32AccessorImpl>(hits_addend);
+    }
+    return nullptr;
+  }
+};
+
+REGISTER_FACTORY(HitsAddendObjectFactory, StreamInfo::FilterState::ObjectFactory);
+
+} // namespace
 
 struct RcDetailsValues {
   // This request went above the configured limits for the rate limit filter.
@@ -55,22 +77,28 @@ void Filter::initiateCall(const Http::RequestHeaderMap& headers) {
   case VhRateLimitOptions::Ignore:
     break;
   case VhRateLimitOptions::Include:
-    populateRateLimitDescriptors(route_entry->virtualHost().rateLimitPolicy(), descriptors,
-                                 headers);
+    populateRateLimitDescriptors(route->virtualHost().rateLimitPolicy(), descriptors, headers);
     break;
   case VhRateLimitOptions::Override:
     if (route_entry->rateLimitPolicy().empty()) {
-      populateRateLimitDescriptors(route_entry->virtualHost().rateLimitPolicy(), descriptors,
-                                   headers);
+      populateRateLimitDescriptors(route->virtualHost().rateLimitPolicy(), descriptors, headers);
     }
     break;
+  }
+
+  const StreamInfo::UInt32Accessor* hits_addend_filter_state =
+      callbacks_->streamInfo().filterState()->getDataReadOnly<StreamInfo::UInt32Accessor>(
+          HitsAddendFilterStateKey);
+  double hits_addend = 0;
+  if (hits_addend_filter_state != nullptr) {
+    hits_addend = hits_addend_filter_state->value();
   }
 
   if (!descriptors.empty()) {
     state_ = State::Calling;
     initiating_call_ = true;
     client_->limit(*this, getDomain(), descriptors, callbacks_->activeSpan(),
-                   callbacks_->streamInfo(), 0);
+                   callbacks_->streamInfo(), hits_addend);
     initiating_call_ = false;
   }
 }
@@ -199,13 +227,13 @@ void Filter::complete(Filters::Common::RateLimit::LimitStatus status,
   if (status == Filters::Common::RateLimit::LimitStatus::OverLimit &&
       config_->runtime().snapshot().featureEnabled("ratelimit.http_filter_enforcing", 100)) {
     state_ = State::Responded;
-    callbacks_->streamInfo().setResponseFlag(StreamInfo::ResponseFlag::RateLimited);
+    callbacks_->streamInfo().setResponseFlag(StreamInfo::CoreResponseFlag::RateLimited);
     callbacks_->sendLocalReply(
         config_->rateLimitedStatus(), response_body,
         [this](Http::HeaderMap& headers) {
           populateResponseHeaders(headers, /*from_local_reply=*/true);
           config_->responseHeadersParser().evaluateHeaders(
-              headers, *request_headers_, dynamic_cast<const Http::ResponseHeaderMap&>(headers),
+              headers, {request_headers_, dynamic_cast<const Http::ResponseHeaderMap*>(&headers)},
               callbacks_->streamInfo());
         },
         config_->rateLimitedGrpcStatus(), RcDetails::get().RateLimited);
@@ -218,9 +246,9 @@ void Filter::complete(Filters::Common::RateLimit::LimitStatus status,
       }
     } else {
       state_ = State::Responded;
-      callbacks_->streamInfo().setResponseFlag(StreamInfo::ResponseFlag::RateLimitServiceError);
-      callbacks_->sendLocalReply(Http::Code::InternalServerError, response_body, nullptr,
-                                 absl::nullopt, RcDetails::get().RateLimitError);
+      callbacks_->streamInfo().setResponseFlag(StreamInfo::CoreResponseFlag::RateLimitServiceError);
+      callbacks_->sendLocalReply(config_->statusOnError(), response_body, nullptr, absl::nullopt,
+                                 RcDetails::get().RateLimitError);
     }
   } else if (!initiating_call_) {
     appendRequestHeaders(req_headers_to_add);
