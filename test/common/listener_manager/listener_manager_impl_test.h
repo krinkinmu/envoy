@@ -13,6 +13,7 @@
 #include "source/common/network/socket_option_impl.h"
 #include "source/server/configuration_impl.h"
 
+#include "test/common/listener_manager/find_filter_chain.h"
 #include "test/mocks/network/mocks.h"
 #include "test/mocks/server/drain_manager.h"
 #include "test/mocks/server/guard_dog.h"
@@ -260,8 +261,10 @@ protected:
     }
     socket_->connection_info_provider_->setDirectRemoteAddressForTest(direct_remote_address_);
 
-    return manager_->listeners().back().get().filterChainManager().findFilterChain(*socket_,
-                                                                                   stream_info_);
+    return *::Envoy::Server::findFilterChain(manager_->listeners().back().get().filterChainManager(),
+                                             *socket_,
+                                             stream_info_,
+                                             dispatcher_);
   }
 
   /**
@@ -491,6 +494,7 @@ protected:
   Filter::NetworkFilterConfigProviderManagerImpl network_config_provider_manager_;
   Filter::TcpListenerFilterConfigProviderManagerImpl tcp_listener_config_provider_manager_;
   Filter::QuicListenerFilterConfigProviderManagerImpl quic_listener_config_provider_manager_;
+  NiceMock<Event::MockDispatcher> dispatcher_;
 };
 } // namespace Server
 } // namespace Envoy

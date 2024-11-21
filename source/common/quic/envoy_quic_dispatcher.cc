@@ -11,6 +11,7 @@
 #include "source/common/quic/envoy_quic_connection_debug_visitor_factory_interface.h"
 #include "source/common/quic/envoy_quic_server_connection.h"
 #include "source/common/quic/envoy_quic_utils.h"
+#include "source/common/quic/find_filter_chain.h"
 
 namespace Envoy {
 namespace Quic {
@@ -117,8 +118,10 @@ std::unique_ptr<quic::QuicSession> EnvoyQuicDispatcher::CreateQuicSession(
           quic_config.ClearAlternateServerAddressToSend(address_family);
         }
       }
-      filter_chain =
-          listener_config_->filterChainManager().findFilterChain(*connection_socket, *stream_info);
+      filter_chain = findFilterChain(listener_config_->filterChainManager(),
+                                     *connection_socket,
+                                     *stream_info,
+                                     dispatcher_);
     }
   }
 

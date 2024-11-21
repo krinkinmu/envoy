@@ -38,11 +38,21 @@ envoy_cc_test(
 )
 
 envoy_cc_test_library(
+    name = "find_filter_chain_lib",
+    hdrs = ["find_filter_chain.h"],
+    srcs = ["find_filter_chain.cc"],
+    deps = [
+        "//envoy/network:filter_interface",
+    ],
+)
+
+envoy_cc_test_library(
     name = "listener_manager_impl_test_lib",
     hdrs = ["listener_manager_impl_test.h"],
     data = ["//test/common/tls/test_data:certs"],
     deps = [
         ":config_cc_proto",
+        ":find_filter_chain_lib",
         "//source/common/formatter:formatter_extension_lib",
         "//source/common/init:manager_lib",
         "//source/common/listener_manager:listener_manager_lib",
@@ -135,6 +145,7 @@ envoy_cc_test(
     data = ["//test/common/tls/test_data:certs"],
     rbe_pool = "6gig",
     deps = [
+        ":find_filter_chain_lib",
         "//source/common/api:os_sys_calls_lib",
         "//source/common/config:metadata_lib",
         "//source/common/listener_manager:filter_chain_manager_lib",
@@ -191,6 +202,7 @@ envoy_cc_benchmark_binary(
     srcs = ["filter_chain_benchmark_test.cc"],
     rbe_pool = "6gig",
     deps = [
+        ":find_filter_chain_lib",
         "//source/common/listener_manager:filter_chain_manager_lib",
         "//test/test_common:environment_lib",
         "//test/mocks/network:network_mocks",

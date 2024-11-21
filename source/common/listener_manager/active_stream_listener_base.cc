@@ -35,18 +35,21 @@ void ActiveStreamListenerBase::emitLogs(Network::ListenerConfig& config,
   }
 }
 
+void ActiveStreamListenerBase::findFilterChain(ActiveTcpSocket& socket) {
+  config_->filterChainManager().findFilterChain(socket.filterChainManagerCallbacks());
+}
+
 void ActiveStreamListenerBase::newConnection(Network::ConnectionSocketPtr&& socket,
-                                             std::unique_ptr<StreamInfo::StreamInfo> stream_info) {
-  // Find matching filter chain.
-  const auto filter_chain = config_->filterChainManager().findFilterChain(*socket, *stream_info);
+                                             std::unique_ptr<StreamInfo::StreamInfo> info,
+                                             const Network::FilterChain* filter_chain) {
   if (filter_chain == nullptr) {
     RELEASE_ASSERT(socket->connectionInfoProvider().remoteAddress() != nullptr, "");
     ENVOY_LOG(debug, "closing connection from {}: no matching filter chain found",
               socket->connectionInfoProvider().remoteAddress()->asString());
     stats_.no_filter_chain_match_.inc();
-    stream_info->setResponseFlag(StreamInfo::CoreResponseFlag::NoRouteFound);
-    stream_info->setResponseCodeDetails(StreamInfo::ResponseCodeDetails::get().FilterChainNotFound);
-    emitLogs(*config_, *stream_info);
+    info->setResponseFlag(StreamInfo::CoreResponseFlag::NoRouteFound);
+    info->setResponseCodeDetails(StreamInfo::ResponseCodeDetails::get().FilterChainNotFound);
+    emitLogs(*config_, *info);
     socket->close();
     return;
   }
@@ -57,7 +60,7 @@ void ActiveStreamListenerBase::newConnection(Network::ConnectionSocketPtr&& sock
 
   auto transport_socket = filter_chain->transportSocketFactory().createDownstreamTransportSocket();
   auto server_conn_ptr = dispatcher().createServerConnection(
-      std::move(socket), std::move(transport_socket), *stream_info);
+      std::move(socket), std::move(transport_socket), *info);
   if (const auto timeout = filter_chain->transportSocketConnectTimeout();
       timeout != std::chrono::milliseconds::zero()) {
     server_conn_ptr->setTransportSocketConnectTimeout(
@@ -72,7 +75,7 @@ void ActiveStreamListenerBase::newConnection(Network::ConnectionSocketPtr&& sock
                    server_conn_ptr->connectionInfoProvider().remoteAddress()->asString());
     server_conn_ptr->close(Network::ConnectionCloseType::NoFlush, "no_filters");
   }
-  newActiveConnection(*filter_chain, std::move(server_conn_ptr), std::move(stream_info));
+  newActiveConnection(*filter_chain, std::move(server_conn_ptr), std::move(info));
 }
 
 ActiveConnections::ActiveConnections(OwnedActiveStreamListenerBase& listener,

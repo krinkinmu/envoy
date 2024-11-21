@@ -21,7 +21,7 @@ public:
   std::unique_ptr<quic::ProofSource>
   createQuicProofSource(Network::Socket& listen_socket,
                         Network::FilterChainManager& filter_chain_manager,
-                        Server::ListenerStats& listener_stats, TimeSource& time_source) override;
+                        Server::ListenerStats& listener_stats, Event::Dispatcher& dispatcher) override;
 };
 
 DECLARE_FACTORY(PendingProofSourceFactoryImpl);

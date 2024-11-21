@@ -103,6 +103,7 @@ envoy_cc_library(
     tags = ["nofips"],
     deps = [
         ":envoy_quic_utils_lib",
+        ":find_filter_chain_lib",
         "@com_github_google_quiche//:quic_core_crypto_certificate_view_lib",
         "@com_github_google_quiche//:quic_core_crypto_crypto_handshake_lib",
         "@com_github_google_quiche//:quic_core_crypto_proof_source_lib",
@@ -415,6 +416,7 @@ envoy_cc_library(
         ":envoy_quic_server_connection_lib",
         ":envoy_quic_server_crypto_stream_factory_lib",
         ":envoy_quic_server_session_lib",
+        ":find_filter_chain_lib",
         ":quic_stat_names_lib",
         "//envoy/network:listener_interface",
         "@com_github_google_quiche//:quic_core_server_lib",
@@ -723,5 +725,14 @@ envoy_cc_library(
         "//source/common/common:assert_lib",
         "//source/common/common:logger_lib",
         "//source/common/runtime:runtime_lib",
+    ],
+)
+
+envoy_cc_library(
+    name = "find_filter_chain_lib",
+    srcs = ["find_filter_chain.cc"],
+    hdrs = ["find_filter_chain.h"],
+    deps = [
+        "//envoy/network:filter_interface",
     ],
 )

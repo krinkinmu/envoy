@@ -83,10 +83,34 @@ public:
   };
   StreamInfo::FilterState& filterState() override { return *stream_info_->filterState().get(); }
   StreamInfo::StreamInfo* streamInfo() const { return stream_info_.get(); }
+  Network::FilterChainManagerCallbacks* filterChainManagerCallbacks() { return &filter_chain_match_context_; }
   bool connected() const { return connected_; }
   bool isEndFilterIteration() const { return iter_ == accept_filters_.end(); }
 
+  void matchWithFilterChain(const Network::FilterChain *filter_chain);
+  bool isMatching() const { return matching_; }
+
 private:
+  class FilterChainMatchContext : public Network::FilterChainManagerCallbacks {
+  public:
+    FilterChainMatchContext(ActiveTcpSocket& socket) : socket_(socket) {}
+
+    StreamInfo::StreamInfo& streamInfo() override {
+      StreamInfo::StreamInfo* info = socket_.streamInfo();
+      ENVOY_BUG(info != nullptr, "socket must have stream info when searching for matching filter chain");
+      return *info;
+    }
+
+    Network::ConnectionSocket& socket() override { return socket_.socket(); }
+    Event::Dispatcher& dispatcher() override { return socket_.dispatcher(); }
+    void newConnectionWithFilterChain(const Network::FilterChain *filter_chain) override {
+      socket_.matchWithFilterChain(filter_chain);
+    }
+
+  private:
+    ActiveTcpSocket& socket_;
+  };
+
   void createListenerFilterBuffer();
 
   // The owner of this ActiveTcpSocket.
@@ -102,8 +126,10 @@ private:
   Event::TimerPtr timer_;
   std::unique_ptr<StreamInfo::StreamInfo> stream_info_;
   bool connected_{false};
+  bool matching_{false};
 
   Network::ListenerFilterBufferImplPtr listener_filter_buffer_;
+  FilterChainMatchContext filter_chain_match_context_;
 };
 
 } // namespace Server

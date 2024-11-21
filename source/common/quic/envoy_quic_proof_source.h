@@ -12,9 +12,9 @@ class EnvoyQuicProofSource : public EnvoyQuicProofSourceBase {
 public:
   EnvoyQuicProofSource(Network::Socket& listen_socket,
                        Network::FilterChainManager& filter_chain_manager,
-                       Server::ListenerStats& listener_stats, TimeSource& time_source)
+                       Server::ListenerStats& listener_stats, Event::Dispatcher& dispatcher)
       : listen_socket_(listen_socket), filter_chain_manager_(&filter_chain_manager),
-        listener_stats_(listener_stats), time_source_(time_source) {}
+        listener_stats_(listener_stats), dispatcher_(dispatcher) {}
 
   ~EnvoyQuicProofSource() override = default;
 
@@ -57,7 +57,7 @@ private:
   Network::Socket& listen_socket_;
   Network::FilterChainManager* filter_chain_manager_{nullptr};
   Server::ListenerStats& listener_stats_;
-  TimeSource& time_source_;
+  Event::Dispatcher& dispatcher_;
 };
 
 } // namespace Quic

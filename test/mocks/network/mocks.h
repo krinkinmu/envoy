@@ -291,8 +291,8 @@ public:
   ~MockFilterChainManager() override;
 
   // Network::FilterChainManager
-  MOCK_METHOD(const FilterChain*, findFilterChain,
-              (const ConnectionSocket& socket, const StreamInfo::StreamInfo& info), (const));
+  MOCK_METHOD(void, findFilterChain,
+              (FilterChainManagerCallbacks* callbacks), (const));
 };
 
 class MockFilterChainFactory : public FilterChainFactory {

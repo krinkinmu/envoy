@@ -563,6 +563,21 @@ public:
 
 using DrainableFilterChainSharedPtr = std::shared_ptr<DrainableFilterChain>;
 
+
+/**
+ * Interface for starting handling new connection with the given filter chain.
+ */
+class FilterChainManagerCallbacks {
+public:
+  virtual ~FilterChainManagerCallbacks() = default;
+
+  virtual StreamInfo::StreamInfo& streamInfo() PURE;
+  virtual ConnectionSocket& socket() PURE;
+  virtual Event::Dispatcher& dispatcher() PURE;
+
+  virtual void newConnectionWithFilterChain(const FilterChain* filter_chain) PURE;
+};
+
 /**
  * Interface for searching through configured filter chains.
  */
@@ -570,16 +585,7 @@ class FilterChainManager {
 public:
   virtual ~FilterChainManager() = default;
 
-  /**
-   * Find filter chain that's matching metadata from the new connection.
-   * @param socket supplies connection metadata that's going to be used for the filter chain lookup.
-   * @param info supplies the dynamic metadata and the filter state populated by the listener
-   * filters.
-   * @return const FilterChain* filter chain to be used by the new connection,
-   *         nullptr if no matching filter chain was found.
-   */
-  virtual const FilterChain* findFilterChain(const ConnectionSocket& socket,
-                                             const StreamInfo::StreamInfo& info) const PURE;
+  virtual void findFilterChain(FilterChainManagerCallbacks* callbacks) const PURE;
 };
 
 /**

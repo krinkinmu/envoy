@@ -56,7 +56,9 @@ public:
    * Create a new connection from a socket accepted by the listener.
    */
   void newConnection(Network::ConnectionSocketPtr&& socket,
-                     std::unique_ptr<StreamInfo::StreamInfo> stream_info);
+                     std::unique_ptr<StreamInfo::StreamInfo> info,
+                     const Network::FilterChain* filter_chain);
+  void findFilterChain(ActiveTcpSocket& socket);
 
   /**
    * Remove the socket from this listener. Should be called when the socket passes the listener
@@ -93,14 +95,15 @@ public:
       ASSERT(active_socket->isEndFilterIteration());
     }
 
-    // Move active_socket to the sockets_ list if filter iteration needs to continue later.
-    // Otherwise we let active_socket be destructed when it goes out of scope.
-    if (!active_socket->isEndFilterIteration()) {
+    // Move active_socket to the sockets_ list if filter iteration or network filter chain
+    // matching needs to continue later. Otherwise we let active_socket be destructed when it
+    // goes out of scope.
+    if (!active_socket->isEndFilterIteration() || !active_socket->isMatching()) {
       active_socket->startTimer();
       LinkedList::moveIntoListBack(std::move(active_socket), sockets_);
     } else {
       if (!active_socket->connected()) {
-        // If active_socket is about to be destructed, emit logs if a connection is not created.
+        // If active_socket is about to be destructed, emit logs if we failed to create a connection.
         if (active_socket->streamInfo() != nullptr) {
           emitLogs(*config_, *active_socket->streamInfo());
         } else {
