@@ -100,9 +100,8 @@ public:
   uint32_t concurrency() const override { return server_.options().concurrency(); }
 
   // Network::FilterChainManager
-  const Network::FilterChain* findFilterChain(const Network::ConnectionSocket&,
-                                              const StreamInfo::StreamInfo&) const override {
-    return admin_filter_chain_.get();
+  void findFilterChain(Network::FilterChainManagerCallbacks *callbacks) const override {
+    callbacks->newConnectionWithFilterChain(admin_filter_chain_.get());
   }
 
   // Network::FilterChainFactory

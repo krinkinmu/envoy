@@ -741,9 +741,8 @@ public:
                        const Network::Address::InstanceConstSharedPtr& peer);
 
   // Network::FilterChainManager
-  const Network::FilterChain* findFilterChain(const Network::ConnectionSocket&,
-                                              const StreamInfo::StreamInfo&) const override {
-    return filter_chain_.get();
+  void findFilterChain(Network::FilterChainManagerCallbacks *callbacks) const override {
+    callbacks->newConnectionWithFilterChain(filter_chain_.get());
   }
 
   // Network::FilterChainFactory

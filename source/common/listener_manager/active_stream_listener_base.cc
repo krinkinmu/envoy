@@ -35,10 +35,13 @@ void ActiveStreamListenerBase::emitLogs(Network::ListenerConfig& config,
   }
 }
 
+void ActiveStreamListenerBase::findFilterChain(ActiveTcpSocket& socket) {
+  config_->filterChainManager().findFilterChain(socket.filterChainManagerCallbacks());
+}
+
 void ActiveStreamListenerBase::newConnection(Network::ConnectionSocketPtr&& socket,
-                                             std::unique_ptr<StreamInfo::StreamInfo> stream_info) {
-  // Find matching filter chain.
-  const auto filter_chain = config_->filterChainManager().findFilterChain(*socket, *stream_info);
+                                             std::unique_ptr<StreamInfo::StreamInfo> stream_info,
+                                             const Network::FilterChain* filter_chain) {
   if (filter_chain == nullptr) {
     RELEASE_ASSERT(socket->connectionInfoProvider().remoteAddress() != nullptr, "");
     ENVOY_LOG(debug, "closing connection from {}: no matching filter chain found",

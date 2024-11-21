@@ -1,6 +1,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,6 +23,7 @@
 #include "source/common/tls/ssl_socket.h"
 #include "source/server/configuration_impl.h"
 
+#include "test/common/listener_manager/find_filter_chain.h"
 #include "test/mocks/network/mocks.h"
 #include "test/mocks/server/drain_manager.h"
 #include "test/mocks/server/factory_context.h"
@@ -100,7 +102,7 @@ public:
     }
     mock_socket->connection_info_provider_->setRemoteAddress(remote_address_);
     NiceMock<StreamInfo::MockStreamInfo> stream_info;
-    return filter_chain_manager_->findFilterChain(*mock_socket, stream_info);
+    return *findFilterChain(*filter_chain_manager_, *mock_socket, stream_info, dispatcher_);
   }
 
   void addSingleFilterChainHelper(
@@ -161,6 +163,7 @@ public:
   NiceMock<MockFilterChainFactoryBuilder> filter_chain_factory_builder_;
   NiceMock<Server::Configuration::MockFactoryContext> parent_context_;
   std::vector<Network::Address::InstanceConstSharedPtr> addresses_;
+  NiceMock<Event::MockDispatcher> dispatcher_;
   // Test target.
   std::unique_ptr<FilterChainManagerImpl> filter_chain_manager_;
 };

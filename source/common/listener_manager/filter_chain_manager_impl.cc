@@ -510,45 +510,46 @@ makeCidrListEntry(const std::string& cidr, const T& data, absl::Status& creation
 
 }; // namespace
 
-const Network::FilterChain*
-FilterChainManagerImpl::findFilterChain(const Network::ConnectionSocket& socket,
-                                        const StreamInfo::StreamInfo& info) const {
+void FilterChainManagerImpl::findFilterChain(Network::FilterChainManagerCallbacks* callbacks) const {
   if (matcher_) {
-    return findFilterChainUsingMatcher(socket, info);
+    // TODO(krinkinmu): support blocking during filter chain matching and resuming the lookup later.
+    auto filter_chain = findFilterChainUsingMatcher(callbacks->socket(), callbacks->streamInfo());
+    callbacks->newConnectionWithFilterChain(filter_chain);
+    return;
   }
 
-  const auto& address = socket.connectionInfoProvider().localAddress();
-
-  const Network::FilterChain* best_match_filter_chain = nullptr;
-  // Match on destination port (only for IP addresses).
+  const auto& address = callbacks->socket().connectionInfoProvider().localAddress();
   if (address->type() == Network::Address::Type::Ip) {
     const auto port_match = destination_ports_map_.find(address->ip()->port());
     if (port_match != destination_ports_map_.end()) {
-      best_match_filter_chain = findFilterChainForDestinationIP(*port_match->second.second, socket);
-      if (best_match_filter_chain != nullptr) {
-        return best_match_filter_chain;
+      auto filter_chain = findFilterChainForDestinationIP(*port_match->second.second, callbacks->socket());
+      if (filter_chain != nullptr) {
+        callbacks->newConnectionWithFilterChain(filter_chain);
       } else {
-        // There is entry for specific port but none of the filter chain matches. Instead of
-        // matching catch-all port 0, the fallback filter chain is returned.
-        return default_filter_chain_.get();
+        callbacks->newConnectionWithFilterChain(default_filter_chain_.get());
       }
+      return;
     }
   }
-  // Match on catch-all port 0 if there is no specific port sub tree.
+
+  const Network::FilterChain* filter_chain = nullptr;
+
   const auto port_match = destination_ports_map_.find(0);
   if (port_match != destination_ports_map_.end()) {
-    best_match_filter_chain = findFilterChainForDestinationIP(*port_match->second.second, socket);
+    filter_chain = findFilterChainForDestinationIP(*port_match->second.second, callbacks->socket());
   }
-  return best_match_filter_chain != nullptr
-             ? best_match_filter_chain
-             // Neither exact port nor catch-all port matches. Use fallback filter chain.
-             : default_filter_chain_.get();
+
+  if (filter_chain == nullptr) {
+    filter_chain = default_filter_chain_.get();
+  }
+
+  callbacks->newConnectionWithFilterChain(filter_chain);
 }
 
 const Network::FilterChain*
-FilterChainManagerImpl::findFilterChainUsingMatcher(const Network::ConnectionSocket& socket,
-                                                    const StreamInfo::StreamInfo& info) const {
-  Network::Matching::MatchingDataImpl data(socket, info.filterState(), info.dynamicMetadata());
+FilterChainManagerImpl::findFilterChainUsingMatcher(Network::ConnectionSocket& socket,
+                                                    StreamInfo::StreamInfo& info) const {
+  Network::Matching::MatchingDataImpl data(socket, info);
   const auto& match_result = Matcher::evaluateMatch<Network::MatchingData>(*matcher_, data);
   ASSERT(match_result.match_state_ == Matcher::MatchState::MatchComplete,
          "Matching must complete for network streams.");

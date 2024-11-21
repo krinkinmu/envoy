@@ -11,6 +11,7 @@
 #include "source/common/network/socket_impl.h"
 
 #include "test/benchmark/main.h"
+#include "test/common/listener_manager/find_filter_chain.h"
 #include "test/mocks/network/mocks.h"
 #include "test/mocks/server/factory_context.h"
 #include "test/mocks/stream_info/mocks.h"
@@ -260,10 +261,11 @@ BENCHMARK_DEFINE_F(FilterChainBenchmarkFixture, FilterChainFindTest)
   THROW_IF_NOT_OK(filter_chain_manager.addFilterChains(nullptr, filter_chains_, nullptr,
                                                        dummy_builder_, filter_chain_manager));
   NiceMock<StreamInfo::MockStreamInfo> stream_info;
+  NiceMock<Event::MockDispatcher> dispatcher;
   for (auto _ : state) {
     UNREFERENCED_PARAMETER(_);
     for (int i = 0; i < state.range(0); i++) {
-      filter_chain_manager.findFilterChain(sockets[i], stream_info);
+      findFilterChain(filter_chain_manager, sockets[i], stream_info, dispatcher);
     }
   }
 }

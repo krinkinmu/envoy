@@ -16,7 +16,8 @@ ActiveTcpSocket::ActiveTcpSocket(ActiveStreamListenerBase& listener,
       iter_(accept_filters_.end()),
       stream_info_(std::make_unique<StreamInfo::StreamInfoImpl>(
           listener_.dispatcher().timeSource(), socket_->connectionInfoProviderSharedPtr(),
-          StreamInfo::FilterState::LifeSpan::Connection)) {
+          StreamInfo::FilterState::LifeSpan::Connection)),
+      filter_chain_match_context_(*this) {
   listener_.stats_.downstream_pre_cx_active_.inc();
 }
 
@@ -160,6 +161,15 @@ void ActiveTcpSocket::continueFilterChain(bool success) {
     // Successfully ran all the accept filters.
     if (no_error) {
       newConnection();
+      // Listener filters finished successfully at this point. We want to continue
+      // to the network filter chain matching, which can block. We keep the
+      // ActiveTcpSocket around until matching is done to preserve the infromation we
+      // need to resume processing after blocking.
+      //
+      // By returning here we are skipping the code that drops the ActiveTcpSocket, so
+      // new connection has to take care of releasing the ActiveTcpSocket when it's
+      // approprite instead.
+      return;
     } else {
       // Signal the caller that no extra filter chain iteration is needed.
       iter_ = accept_filters_.end();
@@ -183,8 +193,6 @@ void ActiveTcpSocket::setDynamicTypedMetadata(const std::string& name,
 }
 
 void ActiveTcpSocket::newConnection() {
-  connected_ = true;
-
   // Check if the socket may need to be redirected to another listener.
   Network::BalancedConnectionHandlerOptRef new_listener;
 
@@ -210,15 +218,39 @@ void ActiveTcpSocket::newConnection() {
     // TODO(mattklein123): See note in ~ActiveTcpSocket() related to making this accounting better.
     listener_.decNumConnections();
     new_listener.value().get().onAcceptWorker(std::move(socket_), false, false);
-  } else {
-    // Set default transport protocol if none of the listener filters did it.
-    if (socket_->detectedTransportProtocol().empty()) {
-      socket_->setDetectedTransportProtocol("raw_buffer");
+    // onAcceptWorker will create a new ActiveTcpSocket if necessary, so we can release this as it's
+    // not needed beyond this point.
+    if (inserted()) {
+      unlink();
     }
+  } else {
     accept_filters_.clear();
-    // Create a new connection on this listener.
-    listener_.newConnection(std::move(socket_), std::move(stream_info_));
+    // Procceed to matching with the network filter chain and creating a new connection on this
+    // listener. We set matching_ to true, to inform the caller that matching is still ongoing and
+    // we need the ActiveTcpSocker to stay around to complete network filter matching.
+    matching_ = true;
+    // Once a proper network fileter chain match was found, the listener will call
+    // matchWithFilterChain function to continue processing.
+    listener_.findFilterChain(*this);
   }
 }
+
+void ActiveTcpSocket::matchWithFilterChain(const Network::FilterChain *filter_chain) {
+  connected_ = true;
+  matching_ = false;
+  // Set default transport protocol if none of the listener filters set it already.
+  // We do it here, because we run some of the listener filters on demand when we
+  // lookup the network filter chain for the new connection. So we need to wait
+  // for the lookup to complete before setting the default value.
+  if (socket_->detectedTransportProtocol().empty()) {
+    socket_->setDetectedTransportProtocol("raw_buffer");
+  }
+  listener_.newConnection(std::move(socket_), std::move(stream_info_), filter_chain);
+  // We are done with the socket at this point, so we can drop it now.
+  if (inserted()) {
+    unlink();
+  }
+}
+
 } // namespace Server
 } // namespace Envoy

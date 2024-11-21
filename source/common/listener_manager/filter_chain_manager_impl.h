@@ -133,7 +133,9 @@ public:
   FilterChainManagerImpl(const std::vector<Network::Address::InstanceConstSharedPtr>& addresses,
                          Configuration::FactoryContext& factory_context,
                          Init::Manager& init_manager)
-      : addresses_(addresses), parent_context_(factory_context), init_manager_(init_manager) {}
+      : addresses_(addresses),
+        parent_context_(factory_context),
+        init_manager_(init_manager) {}
 
   FilterChainManagerImpl(const std::vector<Network::Address::InstanceConstSharedPtr>& addresses,
                          Configuration::FactoryContext& factory_context,
@@ -144,8 +146,7 @@ public:
       const ::envoy::config::listener::v3::FilterChain* const filter_chain) override;
 
   // Network::FilterChainManager
-  const Network::FilterChain* findFilterChain(const Network::ConnectionSocket& socket,
-                                              const StreamInfo::StreamInfo& info) const override;
+  void findFilterChain(Network::FilterChainManagerCallbacks* callbacks) const override;
 
   // Add all filter chains into this manager. During the lifetime of FilterChainManagerImpl this
   // should be called at most once.
@@ -171,8 +172,8 @@ public:
 
 private:
   absl::Status convertIPsToTries();
-  const Network::FilterChain* findFilterChainUsingMatcher(const Network::ConnectionSocket& socket,
-                                                          const StreamInfo::StreamInfo& info) const;
+  const Network::FilterChain* findFilterChainUsingMatcher(Network::ConnectionSocket& socket,
+                                                          StreamInfo::StreamInfo& info) const;
 
   // Build default filter chain from filter chain message. Skip the build but copy from original
   // filter chain manager if the default filter chain message duplicates the message in origin
