@@ -82,7 +82,7 @@ typed_config:
       ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
 
       std::string dump;
-      for (char ch : upstream_request_->body().toString()) {
+      for (char ch : upstream_request_->body()->toString()) {
         dump += std::to_string(int(ch));
         dump += " ";
       }
@@ -90,7 +90,7 @@ typed_config:
       if (!expected_grpc_request_messages.empty()) {
         Grpc::Decoder grpc_decoder;
         std::vector<Grpc::Frame> frames;
-        ASSERT_TRUE(grpc_decoder.decode(upstream_request_->body(), frames).ok()) << dump;
+        ASSERT_TRUE(grpc_decoder.decode(*upstream_request_->body(), frames).ok()) << dump;
         EXPECT_EQ(expected_grpc_request_messages.size(), frames.size());
 
         for (size_t i = 0; i < expected_grpc_request_messages.size(); ++i) {
@@ -106,7 +106,7 @@ typed_config:
       }
 
       if (!expected_upstream_request_body.empty()) {
-        EXPECT_EQ(expected_upstream_request_body, upstream_request_->body().toString());
+        EXPECT_EQ(expected_upstream_request_body, upstream_request_->body()->toString());
       }
 
       Http::TestResponseHeaderMapImpl response_headers;

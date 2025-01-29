@@ -287,7 +287,7 @@ typed_config:
   }
 
   virtual void checkClientSecretInRequest(absl::string_view token_secret) {
-    std::string request_body = oauth2_request_->body().toString();
+    std::string request_body = oauth2_request_->body()->toString();
     const auto query_parameters =
         Http::Utility::QueryParamsMulti::parseParameters(request_body, 0, true);
     auto secret = query_parameters.getFirstValue("client_secret");
@@ -650,13 +650,13 @@ typed_config:
   }
 
   void checkClientSecretInRequest(absl::string_view token_secret) override {
-    EXPECT_FALSE(oauth2_request_->headers().get(Http::CustomHeaders::get().Authorization).empty());
+    EXPECT_FALSE(oauth2_request_->headers()->get(Http::CustomHeaders::get().Authorization).empty());
     const std::string basic_auth_token = absl::StrCat("foo:", token_secret);
     const std::string encoded_token =
         Base64::encode(basic_auth_token.data(), basic_auth_token.size());
     const auto token_secret_expected = absl::StrCat("Basic ", encoded_token);
     EXPECT_EQ(token_secret_expected, oauth2_request_->headers()
-                                         .get(Http::CustomHeaders::get().Authorization)[0]
+                                         ->get(Http::CustomHeaders::get().Authorization)[0]
                                          ->value()
                                          .getStringView());
   }

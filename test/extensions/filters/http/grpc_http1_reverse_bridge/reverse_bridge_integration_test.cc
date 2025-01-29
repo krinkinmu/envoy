@@ -85,8 +85,8 @@ TEST_P(ReverseBridgeIntegrationTest, DisabledRoute) {
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
 
   // Ensure that we don't do anything
-  EXPECT_EQ("abcdef", upstream_request_->body().toString());
-  EXPECT_THAT(upstream_request_->headers(),
+  EXPECT_EQ("abcdef", upstream_request_->body()->toString());
+  EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::Headers::get().ContentType, "application/grpc"));
 
   // Respond to the request.
@@ -135,11 +135,11 @@ TEST_P(ReverseBridgeIntegrationTest, EnabledRoute) {
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
 
   // Ensure that we stripped the length prefix and set the appropriate headers.
-  EXPECT_EQ("f", upstream_request_->body().toString());
+  EXPECT_EQ("f", upstream_request_->body()->toString());
 
-  EXPECT_THAT(upstream_request_->headers(),
+  EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::Headers::get().ContentType, "application/x-protobuf"));
-  EXPECT_THAT(upstream_request_->headers(),
+  EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::CustomHeaders::get().Accept, "application/x-protobuf"));
 
   // Respond to the request.
@@ -226,11 +226,11 @@ TEST_P(ReverseBridgeIntegrationTest, EnabledRouteStreamResponse) {
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
 
   // Ensure that we stripped the length prefix and set the appropriate headers.
-  EXPECT_EQ("f", upstream_request_->body().toString());
+  EXPECT_EQ("f", upstream_request_->body()->toString());
 
-  EXPECT_THAT(upstream_request_->headers(),
+  EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::Headers::get().ContentType, "application/x-protobuf"));
-  EXPECT_THAT(upstream_request_->headers(),
+  EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::CustomHeaders::get().Accept, "application/x-protobuf"));
 
   // Respond to the request.
@@ -295,11 +295,11 @@ TEST_P(ReverseBridgeIntegrationTest, EnabledRouteStreamWithholdResponse) {
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
 
   // Ensure that we stripped the length prefix and set the appropriate headers.
-  EXPECT_EQ("f", upstream_request_->body().toString());
+  EXPECT_EQ("f", upstream_request_->body()->toString());
 
-  EXPECT_THAT(upstream_request_->headers(),
+  EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::Headers::get().ContentType, "application/x-protobuf"));
-  EXPECT_THAT(upstream_request_->headers(),
+  EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::CustomHeaders::get().Accept, "application/x-protobuf"));
 
   // Respond to the request.

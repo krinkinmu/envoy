@@ -66,7 +66,7 @@ void FakeStream::decodeData(Buffer::Instance& data, bool end_stream) {
 void FakeStream::decodeTrailers(Http::RequestTrailerMapPtr&& trailers) {
   absl::MutexLock lock(&lock_);
   setEndStream(true);
-  trailers_ = std::move(trailers);
+  trailers_.reset(trailers.release());
 }
 
 void FakeStream::decodeMetadata(Http::MetadataMapPtr&& metadata_map_ptr) {
@@ -278,8 +278,8 @@ AssertionResult FakeStream::waitForData(Event::Dispatcher& client_dispatcher,
   if (succeeded) {
     absl::MutexLock lock(&lock_);
     Buffer::OwnedImpl buffer(data.data(), data.length());
-    if (!TestUtility::buffersEqual(body(), buffer)) {
-      return AssertionFailure() << body().toString() << " not equal to " << data;
+    if (!TestUtility::buffersEqual(body_, buffer)) {
+      return AssertionFailure() << body_.toString() << " not equal to " << data;
     }
   }
   return succeeded;

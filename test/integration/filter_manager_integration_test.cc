@@ -648,7 +648,7 @@ TEST_P(InjectDataWithHttpConnectionManagerIntegrationTest,
 
   waitForNextUpstreamRequest();
   EXPECT_TRUE(upstream_request_->complete());
-  EXPECT_EQ("hello!", upstream_request_->body().toString());
+  EXPECT_EQ("hello!", upstream_request_->body()->toString());
 
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, false);
   Buffer::OwnedImpl response_data{"greetings"};

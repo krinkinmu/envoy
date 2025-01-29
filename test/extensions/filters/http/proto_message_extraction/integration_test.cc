@@ -120,7 +120,7 @@ TEST_P(IntegrationTest, Unary) {
   // Make sure that the body was properly propagated (with no modification).
   EXPECT_TRUE(upstream_request_->complete());
   EXPECT_TRUE(upstream_request_->receivedData());
-  EXPECT_EQ(upstream_request_->body().toString(), request_data->toString());
+  EXPECT_EQ(upstream_request_->body()->toString(), request_data->toString());
 
   // Send response.
   ApiKey apikey_response = makeCreateApiKeyResponse();
@@ -186,7 +186,7 @@ TEST_P(IntegrationTest, Streaming) {
   // Make sure that the body was properly propagated (with no modification).
   EXPECT_TRUE(upstream_request_->complete());
   EXPECT_TRUE(upstream_request_->receivedData());
-  checkSerializedData<CreateApiKeyRequest>(upstream_request_->body(),
+  checkSerializedData<CreateApiKeyRequest>(*upstream_request_->body(),
                                            {request1, request2, request3});
 
   // Create streaming response and send it.

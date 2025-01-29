@@ -75,7 +75,11 @@ public:
     absl::MutexLock lock(&lock_);
     return body_.length();
   }
-  Buffer::Instance& body() ABSL_NO_THREAD_SAFETY_ANALYSIS { return body_; }
+  std::unique_ptr<Buffer::Instance> body() {
+    absl::MutexLock lock(&lock_);
+    auto body = std::make_unique<Buffer::OwnedImpl>(static_cast<Buffer::Instance&>(body_));
+    return body;
+  }
   bool complete() {
     absl::MutexLock lock(&lock_);
     return end_stream_;
@@ -94,9 +98,15 @@ public:
   void encodeResetStream();
   void encodeMetadata(const Http::MetadataMapVector& metadata_map_vector);
   void readDisable(bool disable);
-  const Http::RequestHeaderMap& headers() ABSL_NO_THREAD_SAFETY_ANALYSIS { return *headers_; }
+  Http::RequestHeaderMapSharedPtr headers() {
+    absl::MutexLock lock(&lock_);
+    return headers_;
+  }
   void setAddServedByHeader(bool add_header) { add_served_by_header_ = add_header; }
-  const Http::RequestTrailerMapPtr& trailers() ABSL_NO_THREAD_SAFETY_ANALYSIS { return trailers_; }
+  Http::RequestTrailerMapSharedPtr trailers() {
+    absl::MutexLock lock(&lock_);
+    return trailers_;
+  }
   bool receivedData() { return received_data_; }
   Http::Http1StreamEncoderOptionsOptRef http1StreamEncoderOptions() {
     return encoder_.http1StreamEncoderOptions();
@@ -251,7 +261,7 @@ protected:
 
 private:
   Http::ResponseEncoder& encoder_;
-  Http::RequestTrailerMapPtr trailers_ ABSL_GUARDED_BY(lock_);
+  Http::RequestTrailerMapSharedPtr trailers_ ABSL_GUARDED_BY(lock_);
   bool end_stream_ ABSL_GUARDED_BY(lock_){};
   bool saw_reset_ ABSL_GUARDED_BY(lock_){};
   Grpc::Decoder grpc_decoder_;

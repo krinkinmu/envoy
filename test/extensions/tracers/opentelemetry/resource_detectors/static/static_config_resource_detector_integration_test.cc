@@ -114,15 +114,15 @@ TEST_P(StaticConfigResourceDetectorIntegrationTest, TestResourceAttributeSet) {
   ASSERT_TRUE(backend_request_->waitForEndStream(*dispatcher_));
 
   // Sanity checking that we sent the expected data.
-  EXPECT_THAT(backend_request_->headers(), HeaderValueOf(Http::Headers::get().Method, "POST"));
-  EXPECT_THAT(backend_request_->headers(),
+  EXPECT_THAT(*backend_request_->headers(), HeaderValueOf(Http::Headers::get().Method, "POST"));
+  EXPECT_THAT(*backend_request_->headers(),
               HeaderValueOf(Http::Headers::get().Path, "/api/v2/traces"));
 
   backend_request_->encodeHeaders(default_response_headers_, true /*end_stream*/);
 
   opentelemetry::proto::collector::trace::v1::ExportTraceServiceRequest message;
   Buffer::InstancePtr message_buffer = std::make_unique<Buffer::OwnedImpl>();
-  message_buffer->add(backend_request_->body());
+  message_buffer->add(*backend_request_->body());
   Buffer::ZeroCopyInputStreamImpl request_stream(std::move(message_buffer));
   EXPECT_TRUE(message.ParseFromZeroCopyStream(&request_stream));
 

@@ -136,7 +136,7 @@ TEST_P(FilterIntegrationTest, AddBodyToRequestAndWaitForIt) {
 
   auto response = codec_client_->makeHeaderOnlyRequest(default_request_headers_);
   waitForNextUpstreamRequest();
-  EXPECT_EQ("body", upstream_request_->body().toString());
+  EXPECT_EQ("body", upstream_request_->body()->toString());
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, false);
   // encode data, as we have a separate test for the transforming header only response.
   upstream_request_->encodeData(128, true);
@@ -182,7 +182,7 @@ TEST_P(FilterIntegrationTest, AddBodyAndTrailer) {
 
   auto response = codec_client_->makeHeaderOnlyRequest(default_request_headers_);
   waitForNextUpstreamRequest();
-  EXPECT_EQ("body", upstream_request_->body().toString());
+  EXPECT_EQ("body", upstream_request_->body()->toString());
   EXPECT_EQ("dummy_request_trailer_value",
             upstream_request_->trailers()
                 ->get(Http::LowerCaseString("dummy_request_trailer"))[0]
@@ -366,7 +366,7 @@ TEST_P(FilterIntegrationTest, ContinueHeadersOnlyInjectBodyFilter) {
   // Make sure that the body was injected to the request.
   EXPECT_TRUE(upstream_request_->complete());
   EXPECT_TRUE(upstream_request_->receivedData());
-  EXPECT_EQ(upstream_request_->body().toString(), "body");
+  EXPECT_EQ(upstream_request_->body()->toString(), "body");
 
   // Send a headers only response.
   upstream_request_->encodeHeaders(default_response_headers_, true);
@@ -392,7 +392,7 @@ TEST_P(FilterIntegrationTest, StopIterationHeadersInjectBodyFilter) {
   // Make sure that the body was injected to the request.
   EXPECT_TRUE(upstream_request_->complete());
   EXPECT_TRUE(upstream_request_->receivedData());
-  EXPECT_EQ(upstream_request_->body().toString(), "body");
+  EXPECT_EQ(upstream_request_->body()->toString(), "body");
 
   // Send a headers only response.
   upstream_request_->encodeHeaders(default_response_headers_, true);
@@ -597,7 +597,7 @@ name: local-reply-during-encode
   ASSERT_TRUE(response->waitForEndStream());
   EXPECT_TRUE(response->complete());
   EXPECT_EQ("500", response->headers().getStatusValue());
-  EXPECT_EQ(0, upstream_request_->body().length());
+  EXPECT_EQ(0, upstream_request_->body()->length());
 }
 
 TEST_P(FilterIntegrationTest, LocalReplyDuringEncodingData) {

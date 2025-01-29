@@ -132,7 +132,7 @@ public:
 
     Request transformed_request;
     Request expected_request;
-    TestUtility::loadFromJson(upstream_request_->body().toString(), transformed_request);
+    TestUtility::loadFromJson(upstream_request_->body()->toString(), transformed_request);
     TestUtility::loadFromJson(expected_json_request, expected_request);
 
     EXPECT_EQ(expected_request.raw_path(), transformed_request.raw_path());
