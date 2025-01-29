@@ -98,14 +98,16 @@ public:
   void encodeResetStream();
   void encodeMetadata(const Http::MetadataMapVector& metadata_map_vector);
   void readDisable(bool disable);
-  Http::RequestHeaderMapSharedPtr headers() {
+  Http::RequestHeaderMapConstSharedPtr headers() {
     absl::MutexLock lock(&lock_);
-    return headers_;
+    Http::RequestHeaderMapConstSharedPtr headers{headers_};
+    return headers;
   }
   void setAddServedByHeader(bool add_header) { add_served_by_header_ = add_header; }
-  Http::RequestTrailerMapSharedPtr trailers() {
+  Http::RequestTrailerMapConstSharedPtr trailers() {
     absl::MutexLock lock(&lock_);
-    return trailers_;
+    Http::RequestTrailerMapConstSharedPtr trailers{trailers_};
+    return trailers;
   }
   bool receivedData() { return received_data_; }
   Http::Http1StreamEncoderOptionsOptRef http1StreamEncoderOptions() {
