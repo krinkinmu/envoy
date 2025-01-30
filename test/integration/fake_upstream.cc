@@ -57,8 +57,8 @@ void FakeStream::decodeHeaders(Http::RequestHeaderMapSharedPtr&& headers, bool e
 }
 
 void FakeStream::decodeData(Buffer::Instance& data, bool end_stream) {
-  received_data_ = true;
   absl::MutexLock lock(&lock_);
+  received_data_ = true;
   body_.add(data);
   setEndStream(end_stream);
 }
