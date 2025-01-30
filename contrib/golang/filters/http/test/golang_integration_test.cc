@@ -351,7 +351,8 @@ typed_config:
     EXPECT_EQ("foo", getHeader(*upstream_request_->headers(), "test-x-set-header-0"));
 
     // check header exists which removed in golang side: x-test-header-1
-    EXPECT_TRUE(upstream_request_->headers()->get(Http::LowerCaseString("x-test-header-1")).empty());
+    EXPECT_TRUE(
+        upstream_request_->headers()->get(Http::LowerCaseString("x-test-header-1")).empty());
 
     // check header value which set in golang: req-downstream-local-address
     EXPECT_TRUE(

@@ -209,9 +209,11 @@ TEST_P(DownstreamUhvIntegrationTest, UrlEncodedTripletsCasePreservedWithUhvOverr
   waitForNextUpstreamRequest();
 
   if (use_universal_header_validator_) {
-    EXPECT_EQ(upstream_request_->headers()->getPathValue(), "/path/with%3Bmixed%5Ccase%FEsequences");
+    EXPECT_EQ(upstream_request_->headers()->getPathValue(),
+              "/path/with%3Bmixed%5Ccase%FEsequences");
   } else {
-    EXPECT_EQ(upstream_request_->headers()->getPathValue(), "/path/with%3bmixed%5Ccase%Fesequences");
+    EXPECT_EQ(upstream_request_->headers()->getPathValue(),
+              "/path/with%3bmixed%5Ccase%Fesequences");
   }
   // Send a headers only response.
   upstream_request_->encodeHeaders(default_response_headers_, true);

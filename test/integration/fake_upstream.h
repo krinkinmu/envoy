@@ -277,7 +277,7 @@ private:
   absl::node_hash_map<std::string, uint64_t> duplicated_metadata_key_count_;
   std::shared_ptr<StreamInfo::StreamInfo> stream_info_;
   AccessLog::InstanceSharedPtrVector access_log_handlers_;
-  bool received_data_ ABSL_GUARDED_BY(lock_) {false};
+  bool received_data_ ABSL_GUARDED_BY(lock_){false};
   bool grpc_stream_started_{false};
   Http::ServerHeaderValidatorPtr header_validator_;
 };

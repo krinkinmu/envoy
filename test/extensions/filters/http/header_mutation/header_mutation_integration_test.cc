@@ -762,7 +762,7 @@ TEST_P(HeaderMutationIntegrationTest, TestDisableDownstreamHeaderMutation) {
 
   EXPECT_EQ(0, upstream_request_->headers()
                    ->get(Http::LowerCaseString("downstream-request-global-flag-header-disabled-by-"
-                                              "default"))
+                                               "default"))
                    .size());
 
   EXPECT_EQ("upstream-request-global-flag-header-value",
@@ -822,7 +822,7 @@ TEST_P(HeaderMutationIntegrationTest, TestDisableDownstreamHeaderMutationWithSpe
 
   EXPECT_EQ(0, upstream_request_->headers()
                    ->get(Http::LowerCaseString("downstream-request-global-flag-header-disabled-by-"
-                                              "default"))
+                                               "default"))
                    .size());
 
   EXPECT_EQ("upstream-request-global-flag-header-value",

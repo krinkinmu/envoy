@@ -2728,7 +2728,8 @@ TEST_P(IntegrationTest, OverwriteXForwardedPortFromUntrustedHop) {
                                      {"connection", "close"},
                                      {"x-forwarded-port", "80"}});
   waitForNextUpstreamRequest();
-  EXPECT_THAT(*upstream_request_->headers(), Not(HeaderValueOf(Headers::get().ForwardedPort, "80")));
+  EXPECT_THAT(*upstream_request_->headers(),
+              Not(HeaderValueOf(Headers::get().ForwardedPort, "80")));
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, true);
   ASSERT_TRUE(response->waitForEndStream());
   ASSERT_TRUE(codec_client_->waitForDisconnect());

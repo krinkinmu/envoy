@@ -1383,7 +1383,8 @@ TEST_P(EmptyHeaderIntegrationTest, AllProtocolsPassEmptyHeaders) {
           {"server", "envoy"}, {"content-length", "0"}, {":status", "200"}},
       0);
   EXPECT_EQ(upstream_request_->headers()->get(Http::LowerCaseString("x-ds-add-empty")).size(), 1);
-  EXPECT_TRUE(upstream_request_->headers()->get(Http::LowerCaseString("x-ds-no-add-empty")).empty());
+  EXPECT_TRUE(
+      upstream_request_->headers()->get(Http::LowerCaseString("x-ds-no-add-empty")).empty());
   EXPECT_EQ(response->headers().get(Http::LowerCaseString("x-us-add-empty")).size(), 1);
   EXPECT_TRUE(response->headers().get(Http::LowerCaseString("x-us-no-add-empty")).empty());
 }

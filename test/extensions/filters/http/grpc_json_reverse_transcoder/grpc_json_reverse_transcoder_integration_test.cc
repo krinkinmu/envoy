@@ -248,7 +248,7 @@ TEST_P(GrpcJsonReverseTranscoderIntegrationTest, NestedHttpBodyRequest) {
       *upstream_request_->headers(),
       HeaderValueOf(Http::Headers::get().ContentType, Http::Headers::get().ContentTypeValues.Json));
   EXPECT_THAT(*upstream_request_->headers(), Http::HeaderValueOf(Http::Headers::get().ContentLength,
-                                                                std::to_string(book_str.size())));
+                                                                 std::to_string(book_str.size())));
   EXPECT_THAT(*upstream_request_->headers(),
               Http::HeaderValueOf(Http::Headers::get().Path, "/v2/shelves/12345/books"));
   EXPECT_EQ(upstream_request_->body()->toString(), book_str);

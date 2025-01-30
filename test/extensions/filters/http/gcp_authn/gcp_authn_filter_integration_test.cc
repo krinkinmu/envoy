@@ -179,7 +179,8 @@ public:
       EXPECT_EQ(upstream_request_->headers()->get(header_key).size(), 1);
       // 2) the token returned from authentication server has been added to the request header that
       // is sent to destination upstream.
-      EXPECT_EQ(upstream_request_->headers()->get(header_key)[0]->value().getStringView(), id_token);
+      EXPECT_EQ(upstream_request_->headers()->get(header_key)[0]->value().getStringView(),
+                id_token);
     }
 
     EXPECT_EQ(0U, upstream_request_->bodyLength());

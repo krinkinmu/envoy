@@ -1127,7 +1127,8 @@ void HttpIntegrationTest::testRetryAttemptCountHeader() {
   waitForNextUpstreamRequest();
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "503"}}, false);
 
-  EXPECT_EQ(atoi(std::string(upstream_request_->headers()->getEnvoyAttemptCountValue()).c_str()), 1);
+  EXPECT_EQ(atoi(std::string(upstream_request_->headers()->getEnvoyAttemptCountValue()).c_str()),
+            1);
 
   if (fake_upstreams_[0]->httpType() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->waitForDisconnect());
@@ -1136,7 +1137,8 @@ void HttpIntegrationTest::testRetryAttemptCountHeader() {
     ASSERT_TRUE(upstream_request_->waitForReset());
   }
   waitForNextUpstreamRequest();
-  EXPECT_EQ(atoi(std::string(upstream_request_->headers()->getEnvoyAttemptCountValue()).c_str()), 2);
+  EXPECT_EQ(atoi(std::string(upstream_request_->headers()->getEnvoyAttemptCountValue()).c_str()),
+            2);
   upstream_request_->encodeHeaders(default_response_headers_, false);
   upstream_request_->encodeData(512, true);
 

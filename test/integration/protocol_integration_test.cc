@@ -869,10 +869,11 @@ TEST_P(ProtocolIntegrationTest, LongHeaderValueWithSpaces) {
                                      {":authority", "sni.lyft.com"},
                                      {"longrequestvalue", long_header_value_with_inner_lws}});
   waitForNextUpstreamRequest();
-  EXPECT_EQ(long_header_value_with_inner_lws, upstream_request_->headers()
-                                                  ->get(Http::LowerCaseString("longrequestvalue"))[0]
-                                                  ->value()
-                                                  .getStringView());
+  EXPECT_EQ(long_header_value_with_inner_lws,
+            upstream_request_->headers()
+                ->get(Http::LowerCaseString("longrequestvalue"))[0]
+                ->value()
+                .getStringView());
   upstream_request_->encodeHeaders(
       Http::TestResponseHeaderMapImpl{{":status", "200"},
                                       {"host", "host"},
@@ -1187,7 +1188,8 @@ TEST_P(DownstreamProtocolIntegrationTest, RetryAttemptCountHeader) {
   waitForNextUpstreamRequest();
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "503"}}, false);
 
-  EXPECT_EQ(atoi(std::string(upstream_request_->headers()->getEnvoyAttemptCountValue()).c_str()), 1);
+  EXPECT_EQ(atoi(std::string(upstream_request_->headers()->getEnvoyAttemptCountValue()).c_str()),
+            1);
 
   if (fake_upstreams_[0]->httpType() == Http::CodecType::HTTP1) {
     ASSERT_TRUE(fake_upstream_connection_->waitForDisconnect());
@@ -1196,7 +1198,8 @@ TEST_P(DownstreamProtocolIntegrationTest, RetryAttemptCountHeader) {
     ASSERT_TRUE(upstream_request_->waitForReset());
   }
   waitForNextUpstreamRequest();
-  EXPECT_EQ(atoi(std::string(upstream_request_->headers()->getEnvoyAttemptCountValue()).c_str()), 2);
+  EXPECT_EQ(atoi(std::string(upstream_request_->headers()->getEnvoyAttemptCountValue()).c_str()),
+            2);
   upstream_request_->encodeHeaders(default_response_headers_, false);
   upstream_request_->encodeData(512, true);
 

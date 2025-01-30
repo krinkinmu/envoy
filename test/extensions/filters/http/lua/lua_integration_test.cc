@@ -426,12 +426,12 @@ typed_config:
           .getStringView(),
       GetParam() == Network::Address::IpVersion::v4 ? "127.0.0.1:" : "[::1]:"));
 
-  EXPECT_TRUE(
-      absl::StrContains(upstream_request_->headers()
-                            ->get(Http::LowerCaseString("request_downstream_local_address_value"))[0]
-                            ->value()
-                            .getStringView(),
-                        GetParam() == Network::Address::IpVersion::v4 ? "127.0.0.1:" : "[::1]:"));
+  EXPECT_TRUE(absl::StrContains(
+      upstream_request_->headers()
+          ->get(Http::LowerCaseString("request_downstream_local_address_value"))[0]
+          ->value()
+          .getStringView(),
+      GetParam() == Network::Address::IpVersion::v4 ? "127.0.0.1:" : "[::1]:"));
 
   EXPECT_TRUE(absl::StrContains(
       upstream_request_->headers()
