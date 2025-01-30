@@ -2403,7 +2403,7 @@ name: local-reply-during-encode
   ASSERT_TRUE(response->waitForEndStream());
   EXPECT_TRUE(response->complete());
   EXPECT_EQ("500", response->headers().getStatusValue());
-  EXPECT_EQ(0, upstream_request_->body()->length());
+  EXPECT_EQ(0, upstream_request_->bodyLength());
 }
 
 TEST_P(DownstreamProtocolIntegrationTest, LocalReplyDuringEncodingData) {
@@ -4694,7 +4694,7 @@ TEST_P(DownstreamProtocolIntegrationTest, ContentLengthSmallerThanPayload) {
     waitForNextUpstreamRequest();
     // HTTP/1.x requests get the payload length from Content-Length header. The remaining bytes is
     // parsed as another request.
-    EXPECT_EQ(123u, upstream_request_->body()->length());
+    EXPECT_EQ(123u, upstream_request_->bodyLength());
     upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, true);
     ASSERT_TRUE(response->waitForEndStream());
     EXPECT_EQ("200", response->headers().getStatusValue());
