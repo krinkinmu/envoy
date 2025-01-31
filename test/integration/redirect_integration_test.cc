@@ -409,7 +409,7 @@ TEST_P(RedirectIntegrationTest, InternalRedirectWithRequestBody) {
   IntegrationStreamDecoderPtr response =
       codec_client_->makeRequestWithBody(default_request_headers_, request_body);
   waitForNextUpstreamRequest();
-  EXPECT_EQ(request_body, upstream_request_->body()->toString());
+  EXPECT_EQ(request_body, upstream_request_->body().toString());
 
   // Respond with a redirect.
   upstream_request_->encodeHeaders(redirect_response_, true);
@@ -418,7 +418,7 @@ TEST_P(RedirectIntegrationTest, InternalRedirectWithRequestBody) {
 
   // Second request to redirected upstream.
   waitForNextUpstreamRequest();
-  EXPECT_EQ(request_body, upstream_request_->body()->toString());
+  EXPECT_EQ(request_body, upstream_request_->body().toString());
   ASSERT(upstream_request_->headers()->EnvoyOriginalUrl() != nullptr);
   EXPECT_EQ("http://handle.internal.redirect/test/long/url",
             upstream_request_->headers()->getEnvoyOriginalUrlValue());
@@ -467,7 +467,7 @@ TEST_P(RedirectIntegrationTest, InternalRedirectHandlesHttp303) {
   IntegrationStreamDecoderPtr response =
       codec_client_->makeRequestWithBody(default_request_headers_, request_body);
   waitForNextUpstreamRequest();
-  EXPECT_EQ(request_body, upstream_request_->body()->toString());
+  EXPECT_EQ(request_body, upstream_request_->body().toString());
 
   // Respond with a redirect.
   redirect_response_.setStatus(303);
@@ -477,7 +477,7 @@ TEST_P(RedirectIntegrationTest, InternalRedirectHandlesHttp303) {
 
   // Second request to redirected upstream.
   waitForNextUpstreamRequest();
-  EXPECT_EQ("", upstream_request_->body()->toString());
+  EXPECT_EQ("", upstream_request_->body().toString());
   ASSERT(upstream_request_->headers()->EnvoyOriginalUrl() != nullptr);
   EXPECT_EQ("http://handle.internal.redirect/test/long/url",
             upstream_request_->headers()->getEnvoyOriginalUrlValue());
@@ -535,7 +535,7 @@ TEST_P(RedirectIntegrationTest, InternalRedirectHttp303PreservesHeadMethod) {
 
   // Second request to redirected upstream.
   waitForNextUpstreamRequest();
-  EXPECT_EQ("", upstream_request_->body()->toString());
+  EXPECT_EQ("", upstream_request_->body().toString());
   ASSERT(upstream_request_->headers()->EnvoyOriginalUrl() != nullptr);
   EXPECT_EQ("http://handle.internal.redirect/test/long/url",
             upstream_request_->headers()->getEnvoyOriginalUrlValue());
@@ -586,7 +586,7 @@ TEST_P(RedirectIntegrationTest, InternalRedirectCancelledDueToBufferOverflow) {
 
   // Wait for a redirect response.
   waitForNextUpstreamRequest();
-  EXPECT_EQ(data, upstream_request_->body()->toString());
+  EXPECT_EQ(data, upstream_request_->body().toString());
   upstream_request_->encodeHeaders(redirect_response_, true);
 
   // Ensure the redirect was returned to the client.

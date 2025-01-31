@@ -65,7 +65,7 @@ TEST_P(TranscoderAsyncBodyInjectionIntegrationTest, HttpPassThroughNoTrailers) {
   // Make sure that the body was properly propagated (with no modification).
   EXPECT_TRUE(upstream_request_->complete());
   EXPECT_TRUE(upstream_request_->receivedData());
-  EXPECT_EQ(upstream_request_->body()->toString(), "request_body");
+  EXPECT_EQ(upstream_request_->body().toString(), "request_body");
 
   // Send response with no trailers.
   upstream_request_->encodeHeaders(default_response_headers_, false);
@@ -94,7 +94,7 @@ TEST_P(TranscoderAsyncBodyInjectionIntegrationTest, HttpPassThroughWithTrailers)
   // Make sure that the body and trailers were properly propagated (with no modification).
   EXPECT_TRUE(upstream_request_->complete());
   EXPECT_TRUE(upstream_request_->receivedData());
-  EXPECT_EQ(upstream_request_->body()->toString(), "request_body");
+  EXPECT_EQ(upstream_request_->body().toString(), "request_body");
   ASSERT_TRUE(upstream_request_->trailers());
   EXPECT_EQ(upstream_request_->trailers()->size(), 1);
 

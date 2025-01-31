@@ -167,7 +167,7 @@ TEST_P(UpstreamAccessLogTest, UpstreamFilterState) {
   EXPECT_THAT(waitForAccessLog(log_file), testing::HasSubstr("test_value"));
 
   EXPECT_TRUE(upstream_request_->complete());
-  EXPECT_EQ("hello!", upstream_request_->body()->toString());
+  EXPECT_EQ("hello!", upstream_request_->body().toString());
 
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, false);
   Buffer::OwnedImpl response_data{"greetings"};
@@ -296,7 +296,7 @@ TEST_P(UpstreamAccessLogTest, Periodic) {
             waitForAccessLog(log_file));
 
   EXPECT_TRUE(upstream_request_->complete());
-  EXPECT_EQ("hello!", upstream_request_->body()->toString());
+  EXPECT_EQ("hello!", upstream_request_->body().toString());
 
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, false);
   Buffer::OwnedImpl response_data{"greetings"};

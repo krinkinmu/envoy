@@ -202,7 +202,7 @@ public:
       return;
     }
     // The ext_proc ProcessingRequest message is JSON encoded in the body of the HTTP message.
-    std::string body = processor_stream_->body()->toString();
+    std::string body = processor_stream_->body().toString();
     ProcessingRequest request;
     bool has_unknown_field;
     auto status = MessageUtil::loadFromJsonNoThrow(body, request, has_unknown_field);
@@ -223,7 +223,7 @@ public:
       absl::optional<std::function<bool(const HttpHeaders&, HeadersResponse&)>> cb) {
     getAndCheckHttpRequest(side_stream, first_message);
 
-    std::string body = processor_stream_->body()->toString();
+    std::string body = processor_stream_->body().toString();
     ProcessingRequest request;
     bool has_unknown_field;
     auto status = MessageUtil::loadFromJsonNoThrow(body, request, has_unknown_field);
@@ -470,7 +470,7 @@ TEST_P(ExtProcHttpClientIntegrationTest, SentHeadersInBothDirection) {
   // The request is sent to the upstream.
   handleUpstreamRequestWithTrailer();
   EXPECT_THAT(*upstream_request_->headers(), SingleHeaderValueIs("x-new-header", "new"));
-  EXPECT_EQ(upstream_request_->body()->toString(), "foo");
+  EXPECT_EQ(upstream_request_->body().toString(), "foo");
 
   processResponseHeadersMessage(http_side_upstreams_[0], false, absl::nullopt);
   verifyDownstreamResponse(*response, 200);

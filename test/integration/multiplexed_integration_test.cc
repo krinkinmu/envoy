@@ -1527,8 +1527,8 @@ TEST_P(MultiplexedIntegrationTest, RequestMirrorWithBody) {
   ASSERT_TRUE(upstream_request2->waitForEndStream(*dispatcher_));
 
   // Make sure both requests have a body. Also check the shadow for the shadow headers.
-  EXPECT_EQ("hello", upstream_request_->body()->toString());
-  EXPECT_EQ("hello", upstream_request2->body()->toString());
+  EXPECT_EQ("hello", upstream_request_->body().toString());
+  EXPECT_EQ("hello", upstream_request2->body().toString());
   EXPECT_EQ("host-shadow", upstream_request2->headers()->getHostValue());
 
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, true);
@@ -1569,7 +1569,7 @@ TEST_P(MultiplexedIntegrationTest, RequestMirrorFailDueToAsyncLb) {
   waitForNextUpstreamRequest();
 
   // Make sure both requests have a body. Also check the shadow for the shadow headers.
-  EXPECT_EQ("hello", upstream_request_->body()->toString());
+  EXPECT_EQ("hello", upstream_request_->body().toString());
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, true);
   ASSERT_TRUE(response->waitForEndStream());
   EXPECT_EQ("200", response->headers().getStatusValue());

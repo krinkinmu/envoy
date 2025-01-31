@@ -75,10 +75,9 @@ public:
     absl::MutexLock lock(&lock_);
     return body_.length();
   }
-  std::unique_ptr<Buffer::Instance> body() const {
+  Buffer::Instance& body() {
     absl::MutexLock lock(&lock_);
-    auto body = std::make_unique<Buffer::OwnedImpl>(static_cast<const Buffer::Instance&>(body_));
-    return body;
+    return body_;
   }
   bool complete() const {
     absl::MutexLock lock(&lock_);

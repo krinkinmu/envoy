@@ -105,7 +105,7 @@ TEST_P(GrpcJsonReverseTranscoderIntegrationTest, SimpleRequest) {
                                   std::to_string(expected_request.size())));
   EXPECT_THAT(*upstream_request_->headers(),
               Http::HeaderValueOf(Http::Headers::get().Path, "/shelves/12345/books/123"));
-  EXPECT_EQ(upstream_request_->body()->toString(), expected_request);
+  EXPECT_EQ(upstream_request_->body().toString(), expected_request);
 
   Http::TestResponseHeaderMapImpl response_headers;
   response_headers.setStatus(200);
@@ -174,7 +174,7 @@ TEST_P(GrpcJsonReverseTranscoderIntegrationTest, HttpBodyRequestResponse) {
       Http::HeaderValueOf(Http::Headers::get().ContentLength, std::to_string(request_str.size())));
   EXPECT_THAT(*upstream_request_->headers(),
               Http::HeaderValueOf(Http::Headers::get().Path, "/echoRawBody"));
-  EXPECT_EQ(upstream_request_->body()->toString(), request_str);
+  EXPECT_EQ(upstream_request_->body().toString(), request_str);
 
   Http::TestResponseHeaderMapImpl response_headers;
   response_headers.setStatus(200);
@@ -251,7 +251,7 @@ TEST_P(GrpcJsonReverseTranscoderIntegrationTest, NestedHttpBodyRequest) {
                                                                  std::to_string(book_str.size())));
   EXPECT_THAT(*upstream_request_->headers(),
               Http::HeaderValueOf(Http::Headers::get().Path, "/v2/shelves/12345/books"));
-  EXPECT_EQ(upstream_request_->body()->toString(), book_str);
+  EXPECT_EQ(upstream_request_->body().toString(), book_str);
 
   Http::TestResponseHeaderMapImpl response_headers;
   response_headers.setStatus(200);

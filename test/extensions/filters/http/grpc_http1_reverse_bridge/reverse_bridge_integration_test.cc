@@ -85,7 +85,7 @@ TEST_P(ReverseBridgeIntegrationTest, DisabledRoute) {
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
 
   // Ensure that we don't do anything
-  EXPECT_EQ("abcdef", upstream_request_->body()->toString());
+  EXPECT_EQ("abcdef", upstream_request_->body().toString());
   EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::Headers::get().ContentType, "application/grpc"));
 
@@ -135,7 +135,7 @@ TEST_P(ReverseBridgeIntegrationTest, EnabledRoute) {
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
 
   // Ensure that we stripped the length prefix and set the appropriate headers.
-  EXPECT_EQ("f", upstream_request_->body()->toString());
+  EXPECT_EQ("f", upstream_request_->body().toString());
 
   EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::Headers::get().ContentType, "application/x-protobuf"));
@@ -226,7 +226,7 @@ TEST_P(ReverseBridgeIntegrationTest, EnabledRouteStreamResponse) {
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
 
   // Ensure that we stripped the length prefix and set the appropriate headers.
-  EXPECT_EQ("f", upstream_request_->body()->toString());
+  EXPECT_EQ("f", upstream_request_->body().toString());
 
   EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::Headers::get().ContentType, "application/x-protobuf"));
@@ -295,7 +295,7 @@ TEST_P(ReverseBridgeIntegrationTest, EnabledRouteStreamWithholdResponse) {
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
 
   // Ensure that we stripped the length prefix and set the appropriate headers.
-  EXPECT_EQ("f", upstream_request_->body()->toString());
+  EXPECT_EQ("f", upstream_request_->body().toString());
 
   EXPECT_THAT(*upstream_request_->headers(),
               HeaderValueOf(Http::Headers::get().ContentType, "application/x-protobuf"));

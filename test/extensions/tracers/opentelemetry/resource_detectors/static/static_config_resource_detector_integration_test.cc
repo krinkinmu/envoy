@@ -122,7 +122,7 @@ TEST_P(StaticConfigResourceDetectorIntegrationTest, TestResourceAttributeSet) {
 
   opentelemetry::proto::collector::trace::v1::ExportTraceServiceRequest message;
   Buffer::InstancePtr message_buffer = std::make_unique<Buffer::OwnedImpl>();
-  message_buffer->add(*backend_request_->body());
+  message_buffer->add(backend_request_->body());
   Buffer::ZeroCopyInputStreamImpl request_stream(std::move(message_buffer));
   EXPECT_TRUE(message.ParseFromZeroCopyStream(&request_stream));
 

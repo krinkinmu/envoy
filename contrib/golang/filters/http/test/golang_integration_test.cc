@@ -379,7 +379,7 @@ typed_config:
     // "prepend_" + upper("helloworld") + "_append"
     std::string expected = "prepend_HELLOWORLD_append";
     // only match the prefix since data buffer may be combined into a single.
-    EXPECT_EQ(expected, upstream_request_->body()->toString());
+    EXPECT_EQ(expected, upstream_request_->body().toString());
 
     // check trailer value which is appended in golang: existed-trailer
     entries = upstream_request_->trailers()->get(Http::LowerCaseString("existed-trailer"));
@@ -1182,7 +1182,7 @@ TEST_P(GolangIntegrationTest, AddDataInDecodeHeaders) {
   EXPECT_EQ("POST", getHeader(*upstream_request_->headers(), ":method"));
   // body added
   auto body = "foo";
-  EXPECT_EQ(body, upstream_request_->body()->toString());
+  EXPECT_EQ(body, upstream_request_->body().toString());
 
   cleanup();
 }
@@ -1203,7 +1203,7 @@ TEST_P(GolangIntegrationTest, AddDataRejectedWhenProcessingData) {
   waitForNextUpstreamRequest();
 
   auto body = "addData called in DecodeData is not allowed";
-  EXPECT_EQ(body, upstream_request_->body()->toString());
+  EXPECT_EQ(body, upstream_request_->body().toString());
 
   cleanup();
 }
@@ -1227,7 +1227,7 @@ TEST_P(GolangIntegrationTest, AddDataInDecodeTrailers) {
 
   // bar added in trailers
   auto body = "foobar";
-  EXPECT_EQ(body, upstream_request_->body()->toString());
+  EXPECT_EQ(body, upstream_request_->body().toString());
 
   cleanup();
 }
@@ -1252,7 +1252,7 @@ TEST_P(GolangIntegrationTest, AddDataBufferAllData) {
 
   // bar added in trailers
   auto body = "foobar";
-  EXPECT_EQ(body, upstream_request_->body()->toString());
+  EXPECT_EQ(body, upstream_request_->body().toString());
 
   cleanup();
 }

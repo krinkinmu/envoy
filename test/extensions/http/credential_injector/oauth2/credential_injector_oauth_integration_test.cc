@@ -56,7 +56,7 @@ resources:
   void TearDown() override { test_server_.reset(); }
 
   virtual void checkClientSecretInRequest(absl::string_view client_secret) {
-    std::string request_body = oauth2_request_->body()->toString();
+    std::string request_body = oauth2_request_->body().toString();
     const auto query_parameters =
         Http::Utility::QueryParamsMulti::parseParameters(request_body, 0, true);
     auto secret = query_parameters.getFirstValue("client_secret");
@@ -66,7 +66,7 @@ resources:
   }
 
   virtual void checkScopeInRequest(absl::string_view desired_scope) {
-    std::string request_body = oauth2_request_->body()->toString();
+    std::string request_body = oauth2_request_->body().toString();
     const auto query_parameters =
         Http::Utility::QueryParamsMulti::parseParameters(request_body, 0, true);
     auto actual_scope = query_parameters.getFirstValue("scope");

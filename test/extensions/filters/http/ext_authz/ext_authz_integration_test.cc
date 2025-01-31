@@ -1387,7 +1387,7 @@ TEST_P(ExtAuthzHttpIntegrationTest, UnmodifiedForwardedForHeader) {
 TEST_P(ExtAuthzHttpIntegrationTest, Body) {
   client_request_body_ = "the request body";
   setup(false);
-  EXPECT_EQ(ext_authz_request_->body()->toString(), client_request_body_);
+  EXPECT_EQ(ext_authz_request_->body().toString(), client_request_body_);
 }
 
 TEST_P(ExtAuthzHttpIntegrationTest, BodyNonUtf8) {
@@ -1396,7 +1396,7 @@ TEST_P(ExtAuthzHttpIntegrationTest, BodyNonUtf8) {
   client_request_body_.append(1, char(0x28));
   client_request_body_.append("valid_suffix");
   setup(false);
-  EXPECT_EQ(ext_authz_request_->body()->toString(), client_request_body_);
+  EXPECT_EQ(ext_authz_request_->body().toString(), client_request_body_);
 }
 
 // (uses new config for allowed_headers).

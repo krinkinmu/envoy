@@ -580,7 +580,7 @@ protected:
     // codec.
     verifyChunkedEncoding(*upstream_request_->headers());
 
-    EXPECT_EQ(upstream_request_->body()->toString(), "Hello, World!");
+    EXPECT_EQ(upstream_request_->body().toString(), "Hello, World!");
     verifyDownstreamResponse(*response, 200);
   }
 
@@ -604,7 +604,7 @@ protected:
     handleUpstreamRequest();
     verifyChunkedEncoding(*upstream_request_->headers());
 
-    EXPECT_EQ(upstream_request_->body()->toString(), "Hello, World!");
+    EXPECT_EQ(upstream_request_->body().toString(), "Hello, World!");
     verifyDownstreamResponse(*response, 200);
   }
 
@@ -1527,7 +1527,7 @@ TEST_P(ExtProcIntegrationTest, RemoveRequestContentLengthInBufferedMode) {
 
   handleUpstreamRequest();
   EXPECT_EQ(upstream_request_->headers()->ContentLength(), nullptr);
-  EXPECT_EQ(upstream_request_->body()->toString(), "Hello, World!");
+  EXPECT_EQ(upstream_request_->body().toString(), "Hello, World!");
   verifyDownstreamResponse(*response, 200);
 }
 
@@ -2446,7 +2446,7 @@ TEST_P(ExtProcIntegrationTest, ConvertGetToPost) {
   EXPECT_THAT(*upstream_request_->headers(), SingleHeaderValueIs(":method", "POST"));
   EXPECT_THAT(*upstream_request_->headers(), SingleHeaderValueIs("content-type", "text/plain"));
   EXPECT_EQ(upstream_request_->bodyLength(), 14);
-  EXPECT_EQ(upstream_request_->body()->toString(), "Hello, Server!");
+  EXPECT_EQ(upstream_request_->body().toString(), "Hello, Server!");
 
   processResponseHeadersMessage(*grpc_upstreams_[0], false, absl::nullopt);
   verifyDownstreamResponse(*response, 200);
@@ -2471,7 +2471,7 @@ TEST_P(ExtProcIntegrationTest, ReplaceCompleteRequest) {
   handleUpstreamRequest();
 
   // Ensure that we replaced and did not append to the request.
-  EXPECT_EQ(upstream_request_->body()->toString(), "Hello, Server!");
+  EXPECT_EQ(upstream_request_->body().toString(), "Hello, Server!");
 
   processResponseHeadersMessage(*grpc_upstreams_[0], false, absl::nullopt);
   verifyDownstreamResponse(*response, 200);
@@ -2500,7 +2500,7 @@ TEST_P(ExtProcIntegrationTest, ReplaceCompleteRequestBuffered) {
   handleUpstreamRequest();
 
   // Ensure that we replaced and did not append to the request.
-  EXPECT_EQ(upstream_request_->body()->toString(), "Hello, Server!");
+  EXPECT_EQ(upstream_request_->body().toString(), "Hello, Server!");
 
   processResponseHeadersMessage(*grpc_upstreams_[0], false, absl::nullopt);
   verifyDownstreamResponse(*response, 200);
@@ -4347,7 +4347,7 @@ TEST_P(ExtProcIntegrationTest, ObservabilityModeWithBody) {
   ASSERT_TRUE(fake_upstream_connection_->waitForNewStream(*dispatcher_, upstream_request_));
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
   // Body mutation response has been ignored.
-  EXPECT_EQ(upstream_request_->body()->toString(), original_body_str);
+  EXPECT_EQ(upstream_request_->body().toString(), original_body_str);
 
   Http::TestResponseHeaderMapImpl response_headers =
       Http::TestResponseHeaderMapImpl{{":status", "200"}};
@@ -4856,7 +4856,7 @@ TEST_P(ExtProcIntegrationTest, SendBodyBeforeHeaderRespStreamedBasicTest) {
   ASSERT_TRUE(upstream_request_->waitForEndStream(*dispatcher_));
   EXPECT_THAT(*upstream_request_->headers(), HasNoHeader("x-remove-this"));
   EXPECT_THAT(*upstream_request_->headers(), SingleHeaderValueIs("x-new-header", "new"));
-  EXPECT_EQ(upstream_request_->body()->toString(), "replaced body");
+  EXPECT_EQ(upstream_request_->body().toString(), "replaced body");
   upstream_request_->encodeHeaders(Http::TestResponseHeaderMapImpl{{":status", "200"}}, false);
   upstream_request_->encodeData(100, true);
   processResponseHeadersMessage(
@@ -4964,7 +4964,7 @@ TEST_P(ExtProcIntegrationTest, ServerWaitForBodyBeforeSendsHeaderRespStreamedTes
 
   handleUpstreamRequest();
   EXPECT_THAT(*upstream_request_->headers(), SingleHeaderValueIs("x-new-header", "new"));
-  EXPECT_EQ(upstream_request_->body()->toString(), body_upstream);
+  EXPECT_EQ(upstream_request_->body().toString(), body_upstream);
   verifyDownstreamResponse(*response, 200);
 }
 
@@ -5017,7 +5017,7 @@ TEST_P(ExtProcIntegrationTest, ServerWaitForBodyBeforeSendsHeaderRespDuplexStrea
 
   handleUpstreamRequest();
   EXPECT_THAT(*upstream_request_->headers(), SingleHeaderValueIs("x-new-header", "new"));
-  EXPECT_EQ(upstream_request_->body()->toString(), body_upstream);
+  EXPECT_EQ(upstream_request_->body().toString(), body_upstream);
   verifyDownstreamResponse(*response, 200);
 }
 
@@ -5065,7 +5065,7 @@ TEST_P(ExtProcIntegrationTest,
 
   handleUpstreamRequest();
   EXPECT_THAT(*upstream_request_->headers(), SingleHeaderValueIs("x-new-header", "new"));
-  EXPECT_EQ(upstream_request_->body()->toString(), body_upstream);
+  EXPECT_EQ(upstream_request_->body().toString(), body_upstream);
   verifyDownstreamResponse(*response, 200);
 }
 
@@ -5145,7 +5145,7 @@ TEST_P(ExtProcIntegrationTest, ServerSendBodyRespWithouRecvEntireBodyDuplexStrea
 
   handleUpstreamRequest();
   EXPECT_THAT(*upstream_request_->headers(), SingleHeaderValueIs("x-new-header", "new"));
-  EXPECT_EQ(upstream_request_->body()->toString(), body_upstream);
+  EXPECT_EQ(upstream_request_->body().toString(), body_upstream);
   verifyDownstreamResponse(*response, 200);
 }
 
@@ -5166,7 +5166,7 @@ TEST_P(ExtProcIntegrationTest, DuplexStreamedInBothDirection) {
 
   handleUpstreamRequest();
   EXPECT_THAT(*upstream_request_->headers(), SingleHeaderValueIs("x-new-header", "new"));
-  EXPECT_EQ(upstream_request_->body()->toString(), body_upstream);
+  EXPECT_EQ(upstream_request_->body().toString(), body_upstream);
 
   // The ext_proc server receives the responses from backend server.
   ProcessingRequest header_response;
@@ -5201,7 +5201,7 @@ TEST_P(ExtProcIntegrationTest, ServerSendOutOfOrderResponseDuplexStreamed) {
   // The backend server processes the request and sends back a 400 response.
   handleUpstreamRequest(false, 400);
   // The body received by upstream server is expected to be empty.
-  EXPECT_EQ(upstream_request_->body()->toString(), "");
+  EXPECT_EQ(upstream_request_->body().toString(), "");
   // As the external processing is shut down, the response messages are not sent
   // to the ext_proc server. Instead it is sent to the downstream directly.
   verifyDownstreamResponse(*response, 400);

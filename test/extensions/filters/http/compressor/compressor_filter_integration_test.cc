@@ -56,7 +56,7 @@ public:
     EXPECT_EQ(response->body(), std::string(response_content_length, 'a'));
 
     Buffer::OwnedImpl decompressed_request{};
-    const Buffer::OwnedImpl compressed_request{*upstream_request_->body()};
+    const Buffer::OwnedImpl compressed_request{upstream_request_->body()};
     decompressor_.decompress(compressed_request, decompressed_request);
     ASSERT_EQ(request_content_length, decompressed_request.length());
     EXPECT_TRUE(TestUtility::buffersEqual(expected_request, decompressed_request));
