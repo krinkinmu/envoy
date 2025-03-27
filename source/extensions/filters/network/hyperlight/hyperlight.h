@@ -42,7 +42,7 @@ public:
     read_callbacks_ = &callbacks;
   }
 
-  absl::Status setupSandbox(const std::string& module_path);
+  absl::Status setupSandbox(const std::string& module_path, bool native);
 
 private:
   void write(absl::Span<uint8_t> data);
@@ -71,16 +71,6 @@ private:
   std::mutex mux_;
   std::string module_path_;
 
-  // NOTE: We have to keep builder around while Hyperlight
-  // sandbox is still alive.
-  //
-  // The reason for that is Builder holds the data required
-  // to dispatch callbacks from the WASM module running
-  // inside Hyperlight into host. So as long as the sandbox
-  // is still there and we might get some guest calls, we
-  // should keep the builder around even if we don't use it
-  // directly.
-  std::unique_ptr<Builder> builder_;
   std::unique_ptr<Sandbox> sandbox_;
   std::thread guest_dispatcher_;
 };

@@ -16,6 +16,7 @@ envoy_cc_library(
     ],
     deps = [
         "@com_github_hyperlight//:hyperlight_lib",
+        "@com_github_hyperlight_native//:hyperlight_native_lib",
     ],
 )
 

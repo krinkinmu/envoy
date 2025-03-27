@@ -226,7 +226,7 @@ Network::FilterStatus HyperlightFilter::onNewConnection() {
 }
 
 Network::FilterStatus HyperlightFilter::onData(Buffer::Instance& buf, bool) {
-  ENVOY_LOG(info, "hyperlight filter received {} bytes", buf.length());
+  // ENVOY_LOG(info, "hyperlight filter received {} bytes", buf.length());
   if (sandbox_) {
     // Buffer::Interface has a rather complex API, so instead of
     // exposing it to the WASM, I'm cutting a corner here and copy
@@ -292,7 +292,7 @@ Network::FilterStatus HyperlightFilter::onData(Buffer::Instance& buf, bool) {
     }
 
     buf.drain(buf.length());
-    ENVOY_LOG(info, "hyperlight filter finished work with status {}", status);
+    // ENVOY_LOG(info, "hyperlight filter finished work with status {}", status);
   }
   return Network::FilterStatus::StopIteration;
 }
@@ -306,8 +306,9 @@ void HyperlightFilter::write(absl::Span<uint8_t> data) {
   }
 }
 
-absl::Status HyperlightFilter::setupSandbox(const std::string& module_path) {
-  auto builder_or = Builder::New();
+absl::Status HyperlightFilter::setupSandbox(const std::string& module_path, bool native) {
+  auto builder_or = native ? Common::Hyperlight::HyperlightNativeBuilder()
+	                   : Common::Hyperlight::HyperlightWasmBuilder();
   if (!builder_or.ok()) {
     ENVOY_LOG(error, "failed to create hyperlight sandbox builder: {}", builder_or.status());
     return builder_or.status();
@@ -334,7 +335,6 @@ absl::Status HyperlightFilter::setupSandbox(const std::string& module_path) {
     return sandbox_or.status();
   }
   sandbox_ = std::move(sandbox_or).value();
-  builder_.reset(builder.release());
   return absl::OkStatus();
 }
 

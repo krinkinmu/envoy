@@ -113,6 +113,13 @@ def _hyperlight_wasm():
 	path = "../hyperlight"
     )
 
+def _hyperlight_native():
+    envoy_new_local_repository(
+        name = "com_github_hyperlight_native",
+	build_file = "@envoy//bazel/external:hyperlight_native.BUILD",
+	path = "../hyperlight-native"
+    )
+
 def envoy_dependencies(skip_targets = []):
     # Setup Envoy developer tools.
     envoy_dev_binding()
@@ -243,6 +250,7 @@ def envoy_dependencies(skip_targets = []):
     _com_github_wasm_c_api()
 
     _hyperlight_wasm()
+    _hyperlight_native()
 
     switched_rules_by_language(
         name = "com_google_googleapis_imports",

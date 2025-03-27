@@ -30,9 +30,10 @@ private:
     }
 
     std::string module_path = config.module_path();
-    return [module_path = std::move(module_path)](Network::FilterManager& filter_manager) -> void {
+    bool native = config.native();
+    return [module_path = std::move(module_path), native](Network::FilterManager& filter_manager) -> void {
       auto filter = std::make_shared<HyperlightFilter>();
-      auto status = filter->setupSandbox(module_path);
+      auto status = filter->setupSandbox(module_path, native);
       if (!status.ok()) {
         // I think that this lambda will be called in data path.
         // We are not allowed to throw exceptions in the data path
