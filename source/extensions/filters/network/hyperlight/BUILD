@@ -16,6 +16,7 @@ envoy_cc_library(
     deps = [
         "//envoy/buffer:buffer_interface",
         "//envoy/common:exception_lib",
+	"//envoy/event:dispatcher_interface",
         "//envoy/network:connection_interface",
         "//envoy/network:filter_interface",
         "//source/common/buffer:buffer_lib",

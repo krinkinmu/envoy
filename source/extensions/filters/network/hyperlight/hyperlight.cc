@@ -7,15 +7,15 @@
 // Envoy creates a fixed number of worker threads during startup.
 // Those threads are special in multiple ways:
 //
-// 1. They are setup in Envoy specific way that allows them to
-//    call Envoy functions - a thread that wasn't setup in such
+// 1. They are configured in Envoy specific way that allows them to
+//    call Envoy functions - a thread that wasn't set up in such
 //    a way cannot, in general, call Envoy functions;
-// 2. Connections that Envoy receives once assigend to a thread,
-//    as far as I understand, stay with the thread - so a lot of
-//    processing related to the same connection in Envoy stays in
-//    the same thread - on the flip side, many data structures in
-//    Envoy are not protected to be accessed concurrently from
-//    multiple threads;
+// 2. Connections that Envoy receives once assigend to a thread
+//    stay with that thread - so a lot of processing related to
+//    the same connection in Envoy stays in the same thread - on
+//    the flip side, many data structures in Envoy are not protected
+//    to be accessed concurrently from multiple threads because of
+//    that;
 // 3. The same thread can handle multiple connections at the same
 //    time switching between them, one processing on one of the
 //    connections cannot make further progress and has to be
@@ -40,7 +40,7 @@
 //    write function below), the call will be made from Thread B.
 //
 // The Envoy threading model and Hyperlight threading model don't
-// work together without intermediary:
+// work together without some additional boilerplate:
 //
 // 1. If we call into hyperlight sandbox from Envoy thread (in the
 //    example above, Thread A is Envoy thread) this call will block
@@ -52,106 +52,19 @@
 //    threads - this is pretty bad because it severly limits what
 //    kind of callbacks can hyperlight sandbox make.
 //
-// Now, the current solution sort-of deals with the problem 2, but
-// does not deal with the problem 1. The way the current solution
-// works is as follows:
+// The current solution is to create a separate thread for calling
+// into the Hyperlight. That allows us to address the first issue
+// by quickly pushing work off the envoy thread and releasing it to
+// do other work.
 //
-// 1. First of all, we have 3 threads that are involved:
-//
-//    1. Thread A - Envoy thread, HyperlightFilter::onData or
-//       HyperlightFilter::onNewConnection methods are called from
-//       this thread;
-//    2. Thread B - guest dispatcher thread, is a thread executing
-//       HyperlightFilter::guestCallDispatchLoop function, this is
-//       not an Envoy thread and it cannot call Envoy functions;
-//    3. Thread C - hyperlight thread, this is also not an Envoy
-//       thread and it cannot call Envoy functions;
-//
-// 2. We want to avoid blocking Thread A (Envoy thread) on hyperlight
-//    calls, because it's the only thread we have that can call Envoy
-//    functions, so we need to save it for that. Therefore, this
-//    thread never calls hyperlight directly and instead sends a
-//    message to the Thread B (guest dispatcher thread) to call
-//    hyperlight by adding a task to the guest_calls_ queue instead.
-//
-// 3. When Thread C (hyperlight thread) needs to call into host and
-//    execute an Envoy function, it cannot do that directly.
-//    Therefore instead of directly calling an Envoy function it adds
-//    a task to the host_calls_ queue instead.
-//
-// 4. The guest_call_ queue is processed by Thread B (guest dispatcher
-//    thread) and host_calls_ queue is processed by Thread A (Envoy
-//    thread), because only Envoy thread can run functions in the
-//    host_calls_ queue.
-//
-// So the control flow might go like this:
-//
-// 1. [In Envoy Thread] onData is called:
-//
-//    1. [In Envoy Thread] a task to call WASM added to the guest_calls_
-//    2. [In Envoy Thread] start waiting for the WASM call to complete or
-//       for a guest call to arrive
-//
-// 2. [In Guest Dispatcher Thread] we notice a new task in the
-//    guest_calls_
-//
-//    1. [In Guest Dispatcher Thread] we call hyperlight
-//    2. [In Guest Dispatcher Thread] we block until hyperlight call
-//       completes
-//
-// 3. [In Hyperlight Thread] we start running WASM module
-//
-//    1. [In Hyperlight Thread] WASM module calls `write` host function
-//    2. [In Hyperlight Thread] We add a task to the host_calls_
-//    3. [In Hyperlight Thread] we block until the host call completes
-//
-// 4. [In Envoy Thread] we notice a new task in host_calls_
-//
-//    1. [In Envoy Thread] we execute the task
-//    2. [In Envoy Thread] we mark host call as complete
-//    3. [In Envoy Thread] start waiting for the WASM call to complete
-//       or for a guest call to arrive
-//
-// 5. [In Hyperlight Thread] we notice that host call completed
-//
-//    1. [In Hyperlight Thread] we continue execution of WASM module
-//    2. [In Hyperlight Thread] WASM module completes the execution
-//       and exits
-//    3. [In Hyperlight Thread] we mark hyperlight call as complete
-//
-// 6. [In Guest Dispatcher Thread] we notice that hyperlight call
-//    completed
-//
-//    1. [In Guest Dispatcher Thread] we mark guest call as complete
-//
-// 7. [In Envoy Thread] we notice that guest call completed
-//
-//    1. [In Envoy Thread] we finish onData callback and return.
-//
-// While this threading model works, it has some downsides:
-//
-// 1. We probably shouldn't create 2 new threads for each connection
-//    - ideally we should either use a thread pool or avoid creating
-//    new threads all togeher;
-// 2. In this model, Envoy thread remains blocked while it's running
-//    onData function and it will often sleep doing nothing just
-//    waiting for things to happen - we should allow the Envoy thread
-//    to process other connections while we are waiting.
-//
-// NOTE: Specifically with regard to the downside 2, while Envoy
-// thread sleeps either guest dispatcher thread or the hyperlight
-// thread do work, so it's not really that different from Envoy thread
-// just doing all those computations by itself.
-//
-// However, even if we are not wasting resources, one heavy computation
-// in an Envoy thread will affect latency of all connection associated
-// with the same thread. So in the ideal world, we should not monopolize
-// Envoy thread shared by multiple connections and release it
-// periodically to process other connections.
+// For the host calls that hyperlight may need, we use Envoy
+// Dispatcher::post method that allows to schedule work on Envoy thread
+// from another, potentially non-Envoy thread.
 #include "source/extensions/filters/network/hyperlight/hyperlight.h"
 
 #include "envoy/buffer/buffer.h"
 #include "envoy/common/exception.h"
+#include "envoy/event/dispatcher.h"
 #include "envoy/network/connection.h"
 
 #include "source/common/buffer/buffer_impl.h"
@@ -170,7 +83,7 @@ HyperlightFilter::~HyperlightFilter() {
     std::unique_lock<std::mutex> lock(mux_);
     guest_done_ = true;
   }
-  cond_.notify_all();
+  cond_.notify_one();
   guest_dispatcher_.join();
 }
 
@@ -190,12 +103,10 @@ void HyperlightFilter::guestCallDispatchLoop() {
       cond_.wait(lock, [this]() -> bool { return guest_done_ || !guest_calls_.empty(); });
     }
 
-    bool had_work = false;
     bool exit = false;
 
     {
       std::unique_lock<std::mutex> lock(mux_);
-      had_work = !guest_calls_.empty();
       while (!guest_calls_.empty()) {
         auto call = guest_calls_.front();
         lock.unlock();
@@ -203,7 +114,7 @@ void HyperlightFilter::guestCallDispatchLoop() {
         // We can't hold the mutex while we are calling into
         // hyperlight. The WASM module that hyperlight
         // executes may call back into Envoy and if we hold
-        // a mutex here it will result in a deadlock.
+        // a mutex here it might result in a deadlock.
         call();
 
         lock.lock();
@@ -211,14 +122,23 @@ void HyperlightFilter::guestCallDispatchLoop() {
       }
       exit = guest_done_;
     }
-
-    if (had_work) {
-      cond_.notify_all();
-    }
     if (exit) {
       return;
     }
   }
+}
+
+// I don't think that it matters whether we continue processing
+// or not here, since Hyperlight filter is terminal and there are
+// no other plugins after it - there is nothing to continue.
+//
+// NOTE: it might be confusing, but pausing processing does not
+// actually prevent any additional onData calls from being
+// triggered in this filter, it only prevents onData calls from
+// being triggered in filters after this one.
+void HyperlightFilter::continueProcessing() {
+  RELEASE_ASSERT(read_callbacks_, "read_callbacks_ is null unexpectedly");
+  read_callbacks_->continueReading();
 }
 
 Network::FilterStatus HyperlightFilter::onNewConnection() {
@@ -226,84 +146,37 @@ Network::FilterStatus HyperlightFilter::onNewConnection() {
 }
 
 Network::FilterStatus HyperlightFilter::onData(Buffer::Instance& buf, bool) {
-  // ENVOY_LOG(info, "hyperlight filter received {} bytes", buf.length());
-  if (sandbox_) {
-    // Buffer::Interface has a rather complex API, so instead of
-    // exposing it to the WASM, I'm cutting a corner here and copy
-    // the data, so I can give to WASM a contigous array of data.
-    std::vector<uint8_t> copy(buf.length(), 0);
-    buf.copyOut(0, buf.length(), static_cast<void*>(copy.data()));
-    absl::Span<uint8_t> data(copy);
-    int32_t status;
+  //ENVOY_LOG(info, "hyperlight filter received {} bytes", buf.length());
+  RELEASE_ASSERT(sandbox_, "sandbox has not been initialized");
+  // Buffer::Interface has a rather complex API, so instead of
+  // exposing it to the WASM, I'm cutting a corner here and copy
+  // the data, so I can give to WASM a contigous array of data.
+  std::vector<uint8_t> data(buf.length(), 0);
+  buf.copyOut(0, buf.length(), static_cast<void*>(data.data()));
+  buf.drain(buf.length());
 
-    // We send the task to call WASM module in Hyperlight to the
-    // guest_dispatcher_ thread, because we cannot afford blocking
-    // this thread as it might have other things to do.
-    //
-    // For details refer to the explanation of the threading model
-    // at the top of the file.
-    {
-      std::unique_lock<std::mutex> lock(mux_);
-      guest_calls_.push([this, &status, data]() { status = sandbox_->run(data); });
-    }
-    cond_.notify_all();
-
-    while (true) {
-      {
-        std::unique_lock<std::mutex> lock(mux_);
-        // We wait for at least one of the following to happen:
-        // 1. WASM in hyperlight finished executing the task we
-        //    gave it above - in this case the task will be
-        //    removed from the guest_calls_ queue.
-        // 2. WASM in hyperlight called the host to do something
-        //    - in this case the tasks it wants us to do will be
-        //    in the host_calls_ queue and it will not be empty.
-        cond_.wait(lock, [this]() -> bool { return !host_calls_.empty() || guest_calls_.empty(); });
-      }
-
-      bool had_work = false;
-      bool exit = false;
-
-      {
-        std::unique_lock<std::mutex> lock(mux_);
-        had_work = !host_calls_.empty();
-        while (!host_calls_.empty()) {
-          auto call = host_calls_.front();
-          lock.unlock();
-
-          // Unlike in guestCallDispatchLoop above, we don't have
-          // to release the mutex to avoid deadlocks here. However
-          // if we don't need to hold the mutex, we probably should
-          // not hold it.
-          call();
-
-          lock.lock();
-          host_calls_.pop();
-        }
-        exit = guest_calls_.empty();
-      }
-
-      if (had_work) {
-        cond_.notify_all();
-      }
-      if (exit) {
-        break;
-      }
-    }
-
-    buf.drain(buf.length());
-    // ENVOY_LOG(info, "hyperlight filter finished work with status {}", status);
+  // We send the task to call WASM module in Hyperlight to the
+  // guest_dispatcher_ thread, because we cannot afford blocking
+  // this thread as it might have other things to do.
+  //
+  // For details refer to the explanation of the threading model
+  // at the top of the file.
+  {
+    std::unique_lock<std::mutex> lock(mux_);
+    guest_calls_.push([this, data = std::move(data)]() mutable {
+      absl::Span<uint8_t> span(data);
+      RELEASE_ASSERT(sandbox_->run(span) == 0, "guest call failed");
+      continueProcessing();
+    });
   }
+  cond_.notify_one();
   return Network::FilterStatus::StopIteration;
 }
 
 void HyperlightFilter::write(absl::Span<uint8_t> data) {
-  if (read_callbacks_) {
-    ::Envoy::Buffer::OwnedImpl buf(data.data(), data.size());
-    read_callbacks_->connection().write(buf, false);
-  } else {
-    ENVOY_LOG(error, "read callbacks hasn't been set in the hyperlight filter");
-  }
+  RELEASE_ASSERT(read_callbacks_, "read_callbacks_ is null unexpectedly");
+  ::Envoy::Buffer::OwnedImpl buf(data.data(), data.size());
+  read_callbacks_->connection().write(buf, false);
 }
 
 absl::Status HyperlightFilter::setupSandbox(const std::string& module_path, bool native) {
@@ -315,17 +188,20 @@ absl::Status HyperlightFilter::setupSandbox(const std::string& module_path, bool
   }
 
   std::unique_ptr<Builder> builder = std::move(builder_or).value();
-  module_path_ = module_path;
-  builder->setModulePath(module_path_);
+  builder->setModulePath(module_path);
   builder->registerFunction("write", [this](absl::Span<uint8_t> data) -> int32_t {
-    std::unique_lock<std::mutex> lock(mux_);
-    host_calls_.push([this, data]() { write(data); });
-    lock.unlock();
-
-    cond_.notify_all();
-
-    lock.lock();
-    cond_.wait(lock, [this]() -> bool { return host_calls_.empty(); });
+    RELEASE_ASSERT(read_callbacks_, "read_callbacks_ is null unexpectedly");
+    bool done = false;
+    read_callbacks_->connection().dispatcher().post([this, data, &done]() {
+      write(data);
+      {
+        std::unique_lock<std::mutex> lock(host_mux_);
+        done = true;
+      }
+      host_cond_.notify_one();
+    });
+    std::unique_lock<std::mutex> lock(host_mux_);
+    host_cond_.wait(lock, [&done]() -> bool { return done; });
     return 0;
   });
 

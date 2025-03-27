@@ -47,6 +47,7 @@ public:
 private:
   void write(absl::Span<uint8_t> data);
   void guestCallDispatchLoop();
+  void continueProcessing();
 
   Network::ReadFilterCallbacks* read_callbacks_ = nullptr;
 
@@ -65,14 +66,15 @@ private:
   // the thread and, therefore, guestDispatcher_ should
   // basically be one of the last fields in the class.
   std::queue<std::function<void()>> guest_calls_;
-  std::queue<std::function<void()>> host_calls_;
   bool guest_done_ = false;
   std::condition_variable cond_;
   std::mutex mux_;
-  std::string module_path_;
+  std::thread guest_dispatcher_;
+
+  std::condition_variable host_cond_;
+  std::mutex host_mux_;
 
   std::unique_ptr<Sandbox> sandbox_;
-  std::thread guest_dispatcher_;
 };
 
 } // namespace Hyperlight
