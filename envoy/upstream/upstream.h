@@ -953,6 +953,28 @@ public:
 };
 
 using HttpProtocolOptionsConfigConstSharedPtr = std::shared_ptr<const HttpProtocolOptionsConfig>;
+using HttpProtocolOptionsConfigOptConstRef = OptRef<const HttpProtocolOptionsConfig>;
+
+/**
+ * Interface providing access to host specific HttpProtocolOptionsConfig.
+ */
+class HostHttpProtocolOptionsConfig : public ProtocolOptionsConfig {
+public:
+  virtual ~HostHttpProtocolOptionsConfig() = default;
+
+  /**
+   * @return HttpProtocolOptionsConfigOptConstRef for the given host if there is any.
+   *         Host-specific HttpProtocolOptionsConfig override the cluster-level HTTP protocol
+   *         configs.
+   */
+  virtual HttpProtocolOptionsConfigOptConstRef get(const HostDescription& host) const PURE;
+};
+
+using HostHttpProtocolOptionsConfigPtr = std::unique_ptr<HostHttpProtocolOptionsConfig>;
+using HostHttpProtocolOptionsConfigConstPtr = std::unique_ptr<const HostHttpProtocolOptionsConfig>;
+using HostHttpProtocolOptionsConfigSharedPtr = std::shared_ptr<HostHttpProtocolOptionsConfig>;
+using HostHttpProtocolOptionsConfigConstSharedPtr =
+    std::shared_ptr<const HostHttpProtocolOptionsConfig>;
 
 /**
  *  Base class for all cluster typed metadata factory.
@@ -1043,7 +1065,8 @@ public:
    * @return const HttpProtocolOptionsConfig& HTTP protocol options for an specific host
    * in this cluster.
    */
-  virtual const HttpProtocolOptionsConfig& httpProtocolOptions(HostDescriptionConstSharedPtr host) const PURE;
+  virtual const HttpProtocolOptionsConfig&
+  httpProtocolOptions(const HostDescription& host) const PURE;
 
   /**
    * @return const HttpProtocolOptionsConfig& HTTP protocol options for this cluster.
@@ -1126,7 +1149,7 @@ public:
    *         if no host-specific override exists.
    * @param host the host to get the max requests for.
    */
-  virtual uint32_t maxRequestsPerConnection(HostDescriptionConstSharedPtr host) const PURE;
+  virtual uint32_t maxRequestsPerConnection(const HostDescription& host) const PURE;
 
   /**
    * @return uint32_t the maximum number of response headers. The default value is 100. Results in a

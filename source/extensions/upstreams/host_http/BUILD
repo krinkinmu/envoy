@@ -9,9 +9,9 @@ licenses(["notice"])  # Apache 2
 envoy_extension_package()
 
 envoy_cc_extension(
-    name = "host_specific_config",
-    srcs = ["host_specific_config.cc"],
-    hdrs = ["host_specific_config.h"],
+    name = "host_config",
+    srcs = ["host_config.cc"],
+    hdrs = ["host_config.h"],
     visibility = ["//visibility:public"],
     deps = [
         "//envoy/registry",
@@ -20,6 +20,6 @@ envoy_cc_extension(
         "//source/common/common:matchers_lib",
         "//source/common/common:minimal_logger_lib",
         "//source/common/protobuf:utility_lib",
-        "@envoy_api//envoy/extensions/upstreams/host_specific_http/v3:pkg_cc_proto",
+        "@envoy_api//envoy/extensions/upstreams/host_http/v3:pkg_cc_proto",
     ],
 )

@@ -58,7 +58,6 @@
 #include "source/common/upstream/cluster_factory_impl.h"
 #include "source/common/upstream/health_checker_impl.h"
 #include "source/common/upstream/locality_pool.h"
-#include "source/extensions/upstreams/host_specific_http/host_specific_config.h"
 #include "source/server/transport_socket_config_impl.h"
 
 #include "absl/container/node_hash_set.h"
@@ -101,12 +100,17 @@ createProtocolOptionsConfig(const std::string& name, const Protobuf::Any& typed_
     factory =
         Registry::FactoryRegistry<Server::Configuration::ProtocolOptionsFactory>::getFactory(name);
   }
+  if (factory == nullptr) {
+    const std::string type{TypeUtil::typeUrlToDescriptorFullName(typed_config.type_url())};
+    factory =
+        Registry::FactoryRegistry<Server::Configuration::HostHttpProtocolOptionsConfigFactory>::getFactoryByType(type);
+  }
 
   if (factory == nullptr) {
     return absl::InvalidArgumentError(
         fmt::format("Didn't find a registered network or http filter or protocol "
-                    "options implementation for name: '{}'",
-                    name));
+                    "options implementation for name '{}' or type '{}'",
+                    name, typed_config.type_url()));
   }
 
   ProtobufTypes::MessagePtr proto_config = factory->createEmptyProtocolOptionsProto();
@@ -1102,6 +1106,7 @@ ClusterInfoImpl::ClusterInfoImpl(
                             "envoy.extensions.upstreams.http.v3.HttpProtocolOptions"),
                         factory_context),
           std::shared_ptr<const ClusterInfoImpl::HttpProtocolOptionsConfigImpl>)),
+      host_http_protocol_options_(THROW_OR_RETURN_VALUE(hostHttpOptions(), HostHttpProtocolOptionsConfigConstSharedPtr)),
       tcp_protocol_options_(extensionProtocolOptionsTyped<TcpProtocolOptionsConfigImpl>(
           "envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions")),
       max_requests_per_connection_(PROTOBUF_GET_WRAPPED_OR_DEFAULT(
@@ -1371,27 +1376,6 @@ ClusterInfoImpl::ClusterInfoImpl(
                                                      "upstream http", "upstream http",
                                                      http_filter_factories_),
                                creation_status);
-    }
-  }
-
-  // Pre-compute merged HttpProtocolOptions for endpoint-specific H2 overrides.
-  const auto ep_specific_protocol_options =
-      extensionProtocolOptionsTyped<Extensions::Upstreams::HostSpecificHttp::EpSpecificProtocolOptionsConfigImpl>(
-          "envoy.extensions.upstreams.host_specific_http.v3.EndpointSpecificHttpProtocolOptions");
-  if (ep_specific_protocol_options != nullptr && http_protocol_options_) {
-    for (const auto& ep_option : ep_specific_protocol_options->compiledOptions()) {
-      if (ep_option.http2_protocol_options.has_value()) {
-        auto merged_or_error =
-            Extensions::Upstreams::Http::ProtocolOptionsConfigImpl::createWithMergedOptions(
-                *http_protocol_options_, *ep_option.http2_protocol_options);
-        if (!merged_or_error.ok()) {
-          creation_status = merged_or_error.status();
-          return;
-        }
-        ep_specific_merged_http_options_.push_back(std::move(merged_or_error.value()));
-      } else {
-        ep_specific_merged_http_options_.push_back(nullptr);
-      }
     }
   }
 }
@@ -1719,57 +1703,24 @@ bool ClusterInfoImpl::maintenanceMode() const {
   return runtime_.snapshot().featureEnabled(maintenance_mode_runtime_key_, 0);
 }
 
-uint32_t ClusterInfoImpl::maxRequestsPerConnection(HostDescriptionConstSharedPtr host) const {
-  // All streams are 2^31. Client streams are half that, minus stream 0. Just to be on the safe
-  // side we do 2^29.
-  constexpr uint32_t DEFAULT_MAX_STREAMS = 1U << 29;
-  uint32_t max_requests =
-      (max_requests_per_connection_ != 0) ? max_requests_per_connection_ : DEFAULT_MAX_STREAMS;
-
-  // Check for endpoint-specific max_requests_per_connection
-  const auto ep_specific_protocol_options =
-      extensionProtocolOptionsTyped<Extensions::Upstreams::HostSpecificHttp::EpSpecificProtocolOptionsConfigImpl>(
-          "envoy.extensions.upstreams.host_specific_http.v3.EndpointSpecificHttpProtocolOptions");
-
-  if (ep_specific_protocol_options != nullptr && host->metadata() != nullptr) {
-    for (const auto& ep_option : ep_specific_protocol_options->compiledOptions()) {
-      // Check if the metadata matcher matches this endpoint's metadata
-      if (ep_option.metadata_matcher.has_value() &&
-          ep_option.metadata_matcher->match(*host->metadata())) {
-        if (ep_option.http_protocol_options.has_value() &&
-            ep_option.http_protocol_options->has_max_requests_per_connection()) {
-          max_requests = ep_option.http_protocol_options->max_requests_per_connection().value();
-        }
-        break;
-      }
-    }
+uint32_t ClusterInfoImpl::maxRequestsPerConnection(const HostDescription& host) const {
+  if (!host_http_protocol_options_ || !host.metadata()) {
+    return maxRequestsPerConnection();
   }
-
-  return max_requests;
+  const HttpProtocolOptionsConfig& options = httpProtocolOptions(host);
+  return PROTOBUF_GET_WRAPPED_OR_DEFAULT(options.commonHttpProtocolOptions(),
+                                         max_requests_per_connection, maxRequestsPerConnection());
 }
 
-const HttpProtocolOptionsConfig& ClusterInfoImpl::httpProtocolOptions(HostDescriptionConstSharedPtr host) const {
-  if (!ep_specific_merged_http_options_.empty() && host->metadata() != nullptr) {
-    const auto ep_specific_protocol_options =
-        extensionProtocolOptionsTyped<Extensions::Upstreams::HostSpecificHttp::EpSpecificProtocolOptionsConfigImpl>(
-            "envoy.extensions.upstreams.host_specific_http.v3.EndpointSpecificHttpProtocolOptions");
-
-    if (ep_specific_protocol_options != nullptr) {
-      size_t index = 0;
-      for (const auto& ep_option : ep_specific_protocol_options->compiledOptions()) {
-        if (ep_option.metadata_matcher.has_value() &&
-            ep_option.metadata_matcher->match(*host->metadata())) {
-          if (index < ep_specific_merged_http_options_.size() &&
-              ep_specific_merged_http_options_[index] != nullptr) {
-            return *ep_specific_merged_http_options_[index];
-          }
-          break;
-        }
-        ++index;
-      }
-    }
+const HttpProtocolOptionsConfig&
+ClusterInfoImpl::httpProtocolOptions(const HostDescription& host) const {
+  if (!host_http_protocol_options_ || !host.metadata()) {
+    return httpProtocolOptions();
   }
-
+  auto opts = host_http_protocol_options_->get(host);
+  if (opts) {
+    return *opts;
+  }
   return httpProtocolOptions();
 }
 
@@ -2194,6 +2145,24 @@ ClusterInfoImpl::ResourceManagers::load(const envoy::config::cluster::v3::Cluste
       ClusterInfoImpl::generateCircuitBreakersStats(stats_scope, priority_stat_name,
                                                     track_remaining, circuit_breakers_stat_names_),
       budget_percent, min_retry_concurrency);
+}
+
+absl::StatusOr<HostHttpProtocolOptionsConfigConstSharedPtr>
+ClusterInfoImpl::hostHttpOptions() const {
+  HostHttpProtocolOptionsConfigConstSharedPtr host_http_options;
+  for (const auto& [name, options] : extension_protocol_options_) {
+    HostHttpProtocolOptionsConfigConstSharedPtr opt =
+        std::dynamic_pointer_cast<const HostHttpProtocolOptionsConfig>(options);
+    if (!opt) {
+      continue;
+    }
+    if (host_http_options) {
+      return absl::InvalidArgumentError(
+          fmt::format("Duplicate upstream host http options provided"));
+    }
+    host_http_options = opt;
+  }
+  return host_http_options;
 }
 
 PriorityStateManager::PriorityStateManager(ClusterImplBase& cluster,

@@ -117,7 +117,7 @@ public:
   const HttpProtocolOptionsConfig& httpProtocolOptions() const override {
     return http_protocol_options_config_;
   }
-  const HttpProtocolOptionsConfig& httpProtocolOptions(HostDescriptionConstSharedPtr host) const override {
+  const HttpProtocolOptionsConfig& httpProtocolOptions(const HostDescription& host) const override {
     (void)host;
     return http_protocol_options_config_;
   }
@@ -137,7 +137,7 @@ public:
   MOCK_METHOD(uint32_t, maxResponseHeadersCount, (), (const));
   MOCK_METHOD(absl::optional<uint16_t>, maxResponseHeadersKb, (), (const));
   MOCK_METHOD(uint32_t, maxRequestsPerConnection, (), (const));
-  MOCK_METHOD(uint32_t, maxRequestsPerConnection, (HostDescriptionConstSharedPtr host), (const));
+  MOCK_METHOD(uint32_t, maxRequestsPerConnection, (const HostDescription& host), (const));
   MOCK_METHOD(const std::string&, name, (), (const));
   MOCK_METHOD(const std::string&, observabilityName, (), (const));
   MOCK_METHOD(ResourceManager&, resourceManager, (ResourcePriority priority), (const));
