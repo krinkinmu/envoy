@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "envoy/config/core/v3/base.pb.h"
 #include "envoy/network/io_handle.h"
 #include "envoy/network/socket.h"
 #include "envoy/stats/scope.h"
@@ -83,6 +84,8 @@ struct ReverseConnectionSocketConfig {
   std::string src_tenant_id;  // Tenant identifier of local envoy instance.
   std::string request_path{
       std::string(ReverseConnectionUtility::DEFAULT_REVERSE_TUNNEL_REQUEST_PATH)};
+  std::vector<envoy::config::core::v3::HeaderValueOption>
+      additional_headers; // Additional headers for the handshake request.
   // TODO(basundhara-c): Add support for multiple remote clusters using the same
   // ReverseConnectionIOHandle. Currently, each ReverseConnectionIOHandle handles
   // reverse connections for a single upstream cluster since a different ReverseConnectionAddress
@@ -205,6 +208,14 @@ public:
   void onBelowWriteBufferLowWatermark() override {}
 
   /**
+   * No-op for reverse connections
+   */
+  Api::SysCallIntResult bind(Network::Address::InstanceConstSharedPtr address) override {
+    ENVOY_LOG(info, "Bind called on rc socket handle: {}", address->logicalName());
+    return Api::SysCallIntResult{0, 0};
+  }
+
+  /**
    * Get the file descriptor for the pipe monitor used to wake up accept().
    * @return the file descriptor for the pipe monitor
    */
@@ -296,6 +307,13 @@ public:
    * @return reference to the configured HTTP handshake request path.
    */
   const std::string& requestPath() const { return config_.request_path; }
+
+  /**
+   * @return reference to the additional headers for the handshake request.
+   */
+  const std::vector<envoy::config::core::v3::HeaderValueOption>& additionalHeaders() const {
+    return config_.additional_headers;
+  }
 
 private:
   /**
@@ -393,7 +411,8 @@ private:
     std::chrono::steady_clock::time_point last_failure_time; // NO_CHECK_FORMAT(real_time)
     std::chrono::steady_clock::time_point backoff_until;     // NO_CHECK_FORMAT(real_time)
     absl::flat_hash_map<std::string, ReverseConnectionState>
-        connection_states; // State tracking per connection
+        connection_states;        // State tracking per connection
+    uint32_t connecting_count{0}; // Number of pending connections.
   };
 
   // Map from host address to connection info.

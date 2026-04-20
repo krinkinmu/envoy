@@ -1,5 +1,6 @@
 #pragma once
 
+#include "envoy/http/async_client.h"
 #include "envoy/network/filter.h"
 #include "envoy/network/listener_filter_buffer.h"
 
@@ -53,6 +54,13 @@ public:
   const DynamicModuleListenerFilterConfig& getFilterConfig() const { return *config_; }
 
   /**
+   * Sends an HTTP callout to the specified cluster with the given message.
+   */
+  envoy_dynamic_module_type_http_callout_init_result
+  sendHttpCallout(uint64_t* callout_id_out, absl::string_view cluster_name,
+                  Http::RequestMessagePtr&& message, uint64_t timeout_milliseconds);
+
+  /**
    * This is called when an event is scheduled via DynamicModuleListenerFilterScheduler.
    */
   void onScheduled(uint64_t event_id);
@@ -102,6 +110,38 @@ private:
   bool destroyed_ = false;
 
   uint32_t worker_index_;
+
+  /**
+   * This implementation of the AsyncClient::Callbacks is used to handle the response from the HTTP
+   * callout from the parent listener filter.
+   */
+  class HttpCalloutCallback : public Http::AsyncClient::Callbacks {
+  public:
+    HttpCalloutCallback(std::shared_ptr<DynamicModuleListenerFilter> filter, uint64_t id)
+        : filter_(std::move(filter)), callout_id_(id) {}
+    ~HttpCalloutCallback() override = default;
+
+    void onSuccess(const Http::AsyncClient::Request& request,
+                   Http::ResponseMessagePtr&& response) override;
+    void onFailure(const Http::AsyncClient::Request& request,
+                   Http::AsyncClient::FailureReason reason) override;
+    void onBeforeFinalizeUpstreamSpan(Envoy::Tracing::Span&,
+                                      const Http::ResponseHeaderMap*) override {};
+    // This is the request object that is used to send the HTTP callout. It is used to cancel the
+    // callout if the filter is destroyed before the callout is completed.
+    Http::AsyncClient::Request* request_ = nullptr;
+
+  private:
+    const std::weak_ptr<DynamicModuleListenerFilter> filter_;
+    const uint64_t callout_id_{};
+  };
+
+  uint64_t getNextCalloutId() { return next_callout_id_++; }
+
+  uint64_t next_callout_id_ = 1; // 0 is reserved as an invalid id.
+
+  absl::flat_hash_map<uint64_t, std::unique_ptr<DynamicModuleListenerFilter::HttpCalloutCallback>>
+      http_callouts_;
 };
 
 /**
@@ -112,14 +152,23 @@ private:
  */
 class DynamicModuleListenerFilterScheduler {
 public:
-  DynamicModuleListenerFilterScheduler(DynamicModuleListenerFilterWeakPtr filter,
-                                       Event::Dispatcher& dispatcher)
-      : filter_(std::move(filter)), dispatcher_(dispatcher) {}
+  explicit DynamicModuleListenerFilterScheduler(DynamicModuleListenerFilterWeakPtr filter)
+      : filter_(std::move(filter)) {}
 
   void commit(uint64_t event_id) {
-    dispatcher_.post([filter = filter_, event_id]() {
-      if (DynamicModuleListenerFilterSharedPtr filter_shared = filter.lock()) {
-        filter_shared->onScheduled(event_id);
+    // Lock the filter so the dispatcher reference obtained via its callbacks stays valid across
+    // `post`.
+    auto filter_shared = filter_.lock();
+    if (!filter_shared) {
+      return;
+    }
+    Event::Dispatcher* dispatcher = filter_shared->dispatcher();
+    if (dispatcher == nullptr) {
+      return;
+    }
+    dispatcher->post([filter = filter_, event_id]() {
+      if (DynamicModuleListenerFilterSharedPtr fs = filter.lock()) {
+        fs->onScheduled(event_id);
       }
     });
   }
@@ -128,8 +177,6 @@ private:
   // The filter that this scheduler is associated with. Using a weak pointer to avoid unnecessarily
   // extending the lifetime of the filter.
   DynamicModuleListenerFilterWeakPtr filter_;
-  // The dispatcher is used to post the event to the worker thread that filter_ is assigned to.
-  Event::Dispatcher& dispatcher_;
 };
 
 } // namespace ListenerFilters

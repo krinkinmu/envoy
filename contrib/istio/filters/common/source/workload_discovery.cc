@@ -62,7 +62,8 @@ Istio::Common::WorkloadMetadataObject convert(const istio::workload::Workload& w
   return Istio::Common::WorkloadMetadataObject(
       workload.name(), workload.cluster_id(), ns, workload.workload_name(),
       workload.canonical_name(), workload.canonical_revision(), workload.canonical_name(),
-      workload.canonical_revision(), workload_type, identity);
+      workload.canonical_revision(), workload_type, identity, workload.locality().region(),
+      workload.locality().zone());
 }
 } // namespace
 
@@ -234,7 +235,7 @@ public:
       : factory_context_(factory_context), config_(config) {}
 
   // Server::Configuration::BootstrapExtension
-  void onServerInitialized() override {
+  void onServerInitialized(Server::Instance&) override {
     provider_ = factory_context_.singletonManager().getTyped<WorkloadMetadataProvider>(
         SINGLETON_MANAGER_REGISTERED_NAME(workload_metadata_provider), [&] {
           return std::make_shared<WorkloadMetadataProviderImpl>(config_.config_source(),

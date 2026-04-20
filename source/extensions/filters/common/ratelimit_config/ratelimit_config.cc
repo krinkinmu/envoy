@@ -45,6 +45,7 @@ RateLimitPolicy::RateLimitPolicy(const ProtoRateLimit& config,
           absl::InvalidArgumentError("hits_addend must contain either a format or a number");
       return;
     }
+    is_negative_hits_ = config.hits_addend().is_negative_hits();
   }
 
   if (config.has_stage() || !config.disable_key().empty()) {
@@ -161,6 +162,10 @@ RateLimitPolicy::RateLimitPolicy(const ProtoRateLimit& config,
           action.query_parameter_value_match(), context, std::move(formatter_or_error.value())));
       break;
     }
+    case ProtoRateLimit::Action::ActionSpecifierCase::kRemoteAddressMatch:
+      actions_.emplace_back(
+          new Router::RemoteAddressMatchAction(action.remote_address_match(), context));
+      break;
     default:
       creation_status = absl::InvalidArgumentError(fmt::format(
           "Unsupported rate limit action: {}", static_cast<int>(action.action_specifier_case())));
@@ -217,6 +222,9 @@ void RateLimitPolicy::populateDescriptors(const Http::RequestHeaderMap& headers,
   } else if (hits_addend_.has_value()) {
     descriptor.hits_addend_ = hits_addend_.value();
   }
+
+  // Populate is_negative.
+  descriptor.is_negative_hits_ = is_negative_hits_;
 
   // Populate enable_x_rate_limit_headers.
   descriptor.x_ratelimit_option_ = x_ratelimit_option_;

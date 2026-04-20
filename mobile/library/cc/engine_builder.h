@@ -157,6 +157,7 @@ public:
   EngineBuilder& enableBrotliDecompression(bool brotli_decompression_on);
   EngineBuilder& enableSocketTagging(bool socket_tagging_on);
   EngineBuilder& enableHttp3(bool http3_on);
+  EngineBuilder& enableEarlyData(bool early_data_on);
   EngineBuilder& addQuicConnectionOption(std::string option);
   EngineBuilder& addQuicClientConnectionOption(std::string option);
   // Deprecated, use addQuicConnectionOption() instead.
@@ -239,6 +240,12 @@ public:
   EngineBuilder& setNodeMetadata(Protobuf::Struct node_metadata);
   // Sets whether to collect Envoy's internal stats (counters & guages). Off by default.
   EngineBuilder& enableStatsCollection(bool stats_collection_on);
+#if defined(__APPLE__)
+  // If true, initialize the platform network change monitor to listen for network change events.
+  // Only takes effect on iOS, where it is required in order to enable the network change monitor.
+  // Defaults to false.
+  EngineBuilder& enableNetworkChangeMonitor(bool network_change_monitor_on);
+#endif
 
 #ifdef ENVOY_MOBILE_XDS
   // Sets the xDS configuration for the Envoy Mobile engine.
@@ -315,6 +322,7 @@ private:
   bool enforce_trust_chain_verification_ = true;
   std::string upstream_tls_sni_;
   bool enable_http3_ = true;
+  bool enable_early_data_{true};
   std::string http3_connection_options_ = "";
   std::string http3_client_connection_options_ = "";
   // EVMB is to distinguish Envoy Mobile client connections.
@@ -367,6 +375,7 @@ private:
   absl::optional<NodeLocality> node_locality_ = absl::nullopt;
   absl::optional<Protobuf::Struct> node_metadata_ = absl::nullopt;
   bool enable_stats_collection_ = true;
+  bool enable_network_change_monitor_ = false;
 #ifdef ENVOY_MOBILE_XDS
   absl::optional<XdsBuilder> xds_builder_ = absl::nullopt;
 #endif // ENVOY_MOBILE_XDS

@@ -53,6 +53,7 @@ struct GrpcInitializeConfigOpts {
   bool stats_expect_response_bytes = true;
   bool enforce_response_header_limits = false;
   uint32_t status_on_error_code = 0;
+  bool shadow_mode = false;
 };
 
 struct WaitForSuccessfulUpstreamResponseOpts {
@@ -152,6 +153,10 @@ public:
 
       if (opts.enforce_response_header_limits) {
         proto_config_.set_enforce_response_header_limits(true);
+      }
+
+      if (opts.shadow_mode) {
+        proto_config_.set_shadow_mode(true);
       }
 
       if (opts.status_on_error_code > 0) {
@@ -478,17 +483,14 @@ public:
                             const Headers& response_headers_to_set,
                             const Headers& response_headers_to_append_if_absent,
                             const Headers& response_headers_to_set_if_exists = {},
-                            bool add_sentinel_header_append_action = false,
-                            const Headers& headers_to_add_if_absent = {},
-                            const Headers& headers_to_overwrite_if_exists = {},
-                            const Headers& headers_to_overwrite_if_exists_or_add = {}) {
+                            bool add_sentinel_header_append_action = false) {
     ext_authz_request_->startGrpcStream();
     envoy::service::auth::v3::CheckResponse check_response;
     check_response.mutable_status()->set_code(Grpc::Status::WellKnownGrpcStatus::Ok);
 
     for (const auto& header_to_add : headers_to_add) {
       auto* entry = check_response.mutable_ok_response()->mutable_headers()->Add();
-      entry->set_append_action(Router::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD);
+      entry->mutable_append()->set_value(false);
       entry->mutable_header()->set_key(header_to_add.first);
       entry->mutable_header()->set_value(header_to_add.second);
     }
@@ -498,27 +500,6 @@ public:
       entry->mutable_append()->set_value(true);
       entry->mutable_header()->set_key(header_to_append.first);
       entry->mutable_header()->set_value(header_to_append.second);
-    }
-
-    for (const auto& header : headers_to_add_if_absent) {
-      auto* entry = check_response.mutable_ok_response()->mutable_headers()->Add();
-      entry->set_append_action(Router::HeaderValueOption::ADD_IF_ABSENT);
-      entry->mutable_header()->set_key(header.first);
-      entry->mutable_header()->set_value(header.second);
-    }
-
-    for (const auto& header : headers_to_overwrite_if_exists) {
-      auto* entry = check_response.mutable_ok_response()->mutable_headers()->Add();
-      entry->set_append_action(Router::HeaderValueOption::OVERWRITE_IF_EXISTS);
-      entry->mutable_header()->set_key(header.first);
-      entry->mutable_header()->set_value(header.second);
-    }
-
-    for (const auto& header : headers_to_overwrite_if_exists_or_add) {
-      auto* entry = check_response.mutable_ok_response()->mutable_headers()->Add();
-      entry->set_append_action(Router::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD);
-      entry->mutable_header()->set_key(header.first);
-      entry->mutable_header()->set_value(header.second);
     }
 
     for (const auto& header_to_remove : headers_to_remove) {
@@ -693,82 +674,6 @@ attributes:
         new_headers_from_upstream, headers_to_append_multiple,
     };
     waitForSuccessfulUpstreamResponse("200", opts);
-
-    cleanup();
-  }
-
-  void expectCheckRequestWithBodyWithAppendActions(
-      Http::CodecType downstream_protocol, uint64_t request_size, const Headers& headers_to_add,
-      const Headers& headers_to_append, const Headers& headers_to_add_if_absent,
-      const Headers& headers_to_overwrite_if_exists,
-      const Headers& headers_to_overwrite_if_exists_or_add) {
-    initializeConfig();
-    setDownstreamProtocol(downstream_protocol);
-    HttpIntegrationTest::initialize();
-
-    // Headers that we will send in the request to test overwrite/append logic.
-    Headers request_headers;
-    request_headers.reserve(headers_to_add.size() + headers_to_append.size());
-    for (const auto& h : headers_to_add) {
-      request_headers.push_back(h);
-    }
-    for (const auto& h : headers_to_append) {
-      request_headers.push_back(h);
-    }
-
-    // We initiate connection with headers_to_add and headers_to_append as initial headers.
-    initiateClientConnection(request_size, request_headers, Headers{}, Headers{});
-    waitForExtAuthzRequest(expectedCheckRequest(downstream_protocol));
-
-    // Send response with new append actions.
-    sendExtAuthzResponse({}, {}, {}, {}, {}, {}, {}, {}, {}, false, headers_to_add_if_absent,
-                         headers_to_overwrite_if_exists, headers_to_overwrite_if_exists_or_add);
-
-    waitForSuccessfulUpstreamResponse("200");
-
-    // Verify headers manually.
-    for (const auto& h : headers_to_add_if_absent) {
-      // Check if it existed in the original request.
-      bool existed = false;
-      std::string original_value;
-      for (const auto& req_h : request_headers) {
-        if (req_h.first == h.first) {
-          existed = true;
-          original_value = req_h.second;
-          break;
-        }
-      }
-
-      if (existed) {
-        // If it existed, it should NOT be changed.
-        EXPECT_THAT(upstream_request_->headers(), ContainsHeader(h.first, original_value));
-      } else {
-        // If it didn't exist, it SHOULD be added.
-        EXPECT_THAT(upstream_request_->headers(), ContainsHeader(h.first, h.second));
-      }
-    }
-    for (const auto& h : headers_to_overwrite_if_exists) {
-      // If the header existed, it should be overwritten. If not, it shouldn't exist unless
-      // it was added by other means. In this test helper we assume simple cases.
-      // We need to check if it was in the initial request to know expectation.
-      bool existed = false;
-      for (const auto& req_h : request_headers) {
-        if (req_h.first == h.first)
-          existed = true;
-      }
-
-      if (existed) {
-        // Header existed, so it should be overwritten with the new value.
-        EXPECT_THAT(upstream_request_->headers(), ContainsHeader(h.first, h.second));
-      } else {
-        // Header did not exist, so OverwriteIfExists should NOT add it.
-        EXPECT_TRUE(upstream_request_->headers().get(Http::LowerCaseString{h.first}).empty())
-            << "Header '" << h.first << "' should not have been added by OverwriteIfExists";
-      }
-    }
-    for (const auto& h : headers_to_overwrite_if_exists_or_add) {
-      EXPECT_THAT(upstream_request_->headers(), ContainsHeader(h.first, h.second));
-    }
 
     cleanup();
   }
@@ -1188,21 +1093,6 @@ TEST_P(ExtAuthzGrpcIntegrationTest, SendHeadersToAddAndToAppendToUpstream) {
       /*headers_to_append_multiple=*/
       Http::TestRequestHeaderMapImpl{{"multiple", "multiple-first"},
                                      {"multiple", "multiple-second"}});
-}
-
-TEST_P(ExtAuthzGrpcIntegrationTest, UpstreamHeadersAppendActions) {
-  expectCheckRequestWithBodyWithAppendActions(
-      Http::CodecType::HTTP1, 4,
-      /*headers_to_add=*/
-      Headers{{"header-to-add-if-absent", "original-value"},
-              {"header-to-overwrite-if-exists", "original-value"}}, // Initial headers
-      /*headers_to_append=*/Headers{},
-      /*headers_to_add_if_absent=*/
-      Headers{{"header-to-add-if-absent", "new-value"}, {"new-header-if-absent", "new-value"}},
-      /*headers_to_overwrite_if_exists=*/
-      Headers{{"header-to-overwrite-if-exists", "new-value"},
-              {"non-existent-header", "should-not-be-added"}},
-      /*headers_to_overwrite_if_exists_or_add=*/Headers{{"header-to-set", "set-value"}});
 }
 
 TEST_P(ExtAuthzGrpcIntegrationTest, AllowAtDisable) {
@@ -3579,6 +3469,43 @@ TEST_P(ExtAuthzGrpcIntegrationTest, ExtensionWithMatcherDynamicMetadata) {
     EXPECT_EQ("403", response->headers().getStatusValue());
     cleanup();
   }
+}
+
+// Verify that in shadow mode a denied response does not terminate the request — the request
+// reaches the upstream and the client gets a 200 — and that the ShadowDecision is readable
+// via %FILTER_STATE(<filter name>)% in access logs.
+TEST_P(ExtAuthzGrpcIntegrationTest, ShadowModeDeniedReachesUpstream) {
+  GrpcInitializeConfigOpts opts;
+  opts.shadow_mode = true;
+  ext_authz_grpc_status_ = LoggingTestFilterConfig::PERMISSION_DENIED;
+  initializeConfig(opts);
+
+  setDownstreamProtocol(Http::CodecType::HTTP1);
+  useAccessLog("%FILTER_STATE(envoy.filters.http.ext_authz.shadow:PLAIN)%");
+  HttpIntegrationTest::initialize();
+
+  initiateClientConnection(0);
+  waitForExtAuthzRequest(expectedCheckRequest(Http::CodecType::HTTP1));
+
+  // Auth server denies the request.
+  ext_authz_request_->startGrpcStream();
+  envoy::service::auth::v3::CheckResponse check_response;
+  check_response.mutable_status()->set_code(Grpc::Status::WellKnownGrpcStatus::PermissionDenied);
+  check_response.mutable_denied_response()->mutable_status()->set_code(
+      envoy::type::v3::StatusCode::Forbidden);
+  check_response.mutable_denied_response()->set_body("you shall not pass");
+  ext_authz_request_->sendGrpcMessage(check_response);
+  ext_authz_request_->finishGrpcStream(Grpc::Status::Ok);
+
+  // In shadow mode the request should reach the upstream despite the deny.
+  waitForSuccessfulUpstreamResponse("200");
+
+  // The shadow decision is exposed in the access log via FilterState.
+  const std::string log = waitForAccessLog(access_log_name_);
+  EXPECT_THAT(log, testing::HasSubstr("DENIED"));
+  EXPECT_THAT(log, testing::HasSubstr("403"));
+
+  cleanup();
 }
 
 // Regression test for https://github.com/envoyproxy/envoy/issues/17344

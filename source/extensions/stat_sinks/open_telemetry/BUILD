@@ -35,8 +35,8 @@ envoy_cc_library(
         "//source/common/stats:stat_match_input_lib",
         "//source/extensions/tracers/opentelemetry/resource_detectors:resource_detector_lib",
         "@envoy_api//envoy/extensions/stat_sinks/open_telemetry/v3:pkg_cc_proto",
-        "@opentelemetry_proto//:metrics_proto_cc",
-        "@opentelemetry_proto//:metrics_service_proto_cc",
+        "@opentelemetry-proto//:metrics_proto_cc",
+        "@opentelemetry-proto//:metrics_service_proto_cc",
     ],
 )
 
@@ -50,6 +50,7 @@ envoy_cc_library(
         "//source/common/http:async_client_lib",
         "//source/common/http:async_client_utility_lib",
         "//source/common/http:header_map_lib",
+        "//source/common/http:http_service_headers_lib",
         "//source/common/http:message_lib",
         "//source/common/http:utility_lib",
         "//source/common/protobuf",

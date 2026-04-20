@@ -97,31 +97,13 @@ MATCHER_P(HasTimeout, expected_timeout_ms, "") {
   return true;
 }
 
-// Matcher to verify RequestOptions has no timeout (infinite).
-// This is used to verify that timeout: 0s results in no timeout being set.
+// Matcher to verify RequestOptions has no timeout set.
 MATCHER(HasNoTimeout, "") {
   if (arg.timeout.has_value()) {
-    *result_listener << "timeout is set to " << arg.timeout->count() << "ms, expected no timeout";
+    *result_listener << "expected no timeout, but timeout is " << arg.timeout->count() << "ms";
     return false;
   }
   return true;
-}
-
-// Type aliases for convenience.
-using HeaderAppendAction = Filters::Common::ExtAuthz::HeaderAppendAction;
-using HeaderValueOption = Filters::Common::ExtAuthz::HeaderValueOption;
-using HeaderMutation = Filters::Common::ExtAuthz::HeaderMutation;
-
-// Helper to create a HeaderMutation for request headers.
-HeaderMutation createRequestHeaderMutation(const std::string& key, const std::string& value,
-                                           HeaderAppendAction append_action) {
-  return HeaderMutation{key, value, append_action};
-}
-
-// Helper to create a HeaderMutation for response headers.
-HeaderMutation createResponseHeaderMutation(const std::string& key, const std::string& value,
-                                            HeaderAppendAction append_action) {
-  return HeaderMutation{key, value, append_action};
 }
 
 constexpr char FilterConfigName[] = "ext_authz_filter";
@@ -475,6 +457,7 @@ public:
           envoy_grpc:
             cluster_name: "ext_authz_server"
         validate_mutations: true
+        emit_filter_state_stats: true
     )");
 
     // Simulate a downstream request.
@@ -581,70 +564,54 @@ TEST_P(InvalidMutationParamTest, InvalidMutationFields) {
 INSTANTIATE_TEST_SUITE_P(
     InvalidMutationScenarios, InvalidMutationParamTest,
     testing::Values(
-        // Invalid key tests for request header mutations.
+        // Invalid key tests
         std::make_tuple(
-            "RequestHeadersSetKey",
+            "HeadersToSetKey",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.request_header_mutations.push_back(
-                  {InvalidMutationTest::invalid_key_, "bar",
-                   Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+              r.headers_to_set = {{InvalidMutationTest::invalid_key_, "bar"}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "RequestHeadersAddKey",
+            "HeadersToAddKey",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.request_header_mutations.push_back(
-                  {InvalidMutationTest::invalid_key_, "bar",
-                   Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+              r.headers_to_add = {{InvalidMutationTest::invalid_key_, "bar"}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "LocalResponseHeadersSetKeyDenied",
+            "HeadersToSetKeyDenied",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.local_response_header_mutations.push_back(
-                  {InvalidMutationTest::invalid_key_, "bar",
-                   Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+              r.headers_to_set = {{InvalidMutationTest::invalid_key_, "bar"}};
             },
             Filters::Common::ExtAuthz::CheckStatus::Denied),
         std::make_tuple(
-            "RequestHeadersAppendKey",
+            "HeadersToAppendKey",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.request_header_mutations.push_back(
-                  {InvalidMutationTest::invalid_key_, "bar",
-                   Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-            },
-            Filters::Common::ExtAuthz::CheckStatus::OK),
-        // Invalid key tests for response header mutations.
-        std::make_tuple(
-            "ResponseHeadersAddKey",
-            [](Filters::Common::ExtAuthz::Response& r) {
-              r.response_header_mutations.push_back(
-                  {InvalidMutationTest::invalid_key_, "bar",
-                   Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+              r.headers_to_append = {{InvalidMutationTest::invalid_key_, "bar"}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "ResponseHeadersSetKey",
+            "ResponseHeadersToAddKey",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.response_header_mutations.push_back(
-                  {InvalidMutationTest::invalid_key_, "bar",
-                   Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+              r.response_headers_to_set = {{InvalidMutationTest::invalid_key_, "bar"}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "ResponseHeadersAddIfAbsentKey",
+            "ResponseHeadersToSetKey",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.response_header_mutations.push_back(
-                  {InvalidMutationTest::invalid_key_, "bar",
-                   Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
+              r.response_headers_to_set = {{InvalidMutationTest::invalid_key_, "bar"}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "ResponseHeadersOverwriteIfExistsKey",
+            "ResponseHeadersToAddIfAbsentKey",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.response_header_mutations.push_back(
-                  {InvalidMutationTest::invalid_key_, "bar",
-                   Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS});
+              r.response_headers_to_add_if_absent = {{InvalidMutationTest::invalid_key_, "bar"}};
+            },
+            Filters::Common::ExtAuthz::CheckStatus::OK),
+        std::make_tuple(
+            "ResponseHeadersToOverwriteIfExistsKey",
+            [](Filters::Common::ExtAuthz::Response& r) {
+              r.response_headers_to_overwrite_if_exists = {
+                  {InvalidMutationTest::invalid_key_, "bar"}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
@@ -653,70 +620,55 @@ INSTANTIATE_TEST_SUITE_P(
               r.query_parameters_to_set = {{"f o o", "bar"}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
-        // Invalid value tests for request header mutations.
+        // Invalid value tests
         std::make_tuple(
-            "RequestHeadersSetValue",
+            "HeadersToSetValue",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.request_header_mutations.push_back(
-                  {"foo", InvalidMutationTest::getInvalidValue(),
-                   Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+              r.headers_to_set = {{"foo", InvalidMutationTest::getInvalidValue()}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "RequestHeadersAddValue",
+            "HeadersToAddValue",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.request_header_mutations.push_back(
-                  {"foo", InvalidMutationTest::getInvalidValue(),
-                   Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+              r.headers_to_add = {{"foo", InvalidMutationTest::getInvalidValue()}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "LocalResponseHeadersSetValueDenied",
+            "HeadersToSetValueDenied",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.local_response_header_mutations.push_back(
-                  {"foo", InvalidMutationTest::getInvalidValue(),
-                   Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+              r.headers_to_set = {{"foo", InvalidMutationTest::getInvalidValue()}};
             },
             Filters::Common::ExtAuthz::CheckStatus::Denied),
         std::make_tuple(
-            "RequestHeadersAppendValue",
+            "HeadersToAppendValue",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.request_header_mutations.push_back(
-                  {"foo", InvalidMutationTest::getInvalidValue(),
-                   Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-            },
-            Filters::Common::ExtAuthz::CheckStatus::OK),
-        // Invalid value tests for response header mutations.
-        std::make_tuple(
-            "ResponseHeadersAddValue",
-            [](Filters::Common::ExtAuthz::Response& r) {
-              r.response_header_mutations.push_back(
-                  {"foo", InvalidMutationTest::getInvalidValue(),
-                   Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+              r.headers_to_append = {{"foo", InvalidMutationTest::getInvalidValue()}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "ResponseHeadersSetValue",
+            "ResponseHeadersToAddValue",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.response_header_mutations.push_back(
-                  {"foo", InvalidMutationTest::getInvalidValue(),
-                   Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+              r.response_headers_to_set = {{"foo", InvalidMutationTest::getInvalidValue()}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "ResponseHeadersAddIfAbsentValue",
+            "ResponseHeadersToSetValue",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.response_header_mutations.push_back(
-                  {"foo", InvalidMutationTest::getInvalidValue(),
-                   Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
+              r.response_headers_to_set = {{"foo", InvalidMutationTest::getInvalidValue()}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
-            "ResponseHeadersOverwriteIfExistsValue",
+            "ResponseHeadersToAddIfAbsentValue",
             [](Filters::Common::ExtAuthz::Response& r) {
-              r.response_header_mutations.push_back(
-                  {"foo", InvalidMutationTest::getInvalidValue(),
-                   Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS});
+              r.response_headers_to_add_if_absent = {
+                  {"foo", InvalidMutationTest::getInvalidValue()}};
+            },
+            Filters::Common::ExtAuthz::CheckStatus::OK),
+        std::make_tuple(
+            "ResponseHeadersToOverwriteIfExistsValue",
+            [](Filters::Common::ExtAuthz::Response& r) {
+              r.response_headers_to_overwrite_if_exists = {
+                  {"foo", InvalidMutationTest::getInvalidValue()}};
             },
             Filters::Common::ExtAuthz::CheckStatus::OK),
         std::make_tuple(
@@ -733,9 +685,7 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_F(InvalidMutationTest, BasicInvalidKey) {
   Filters::Common::ExtAuthz::Response response;
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(
-      {invalid_key_, "bar",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  response.headers_to_set = {{invalid_key_, "bar"}};
   testResponse(response);
 }
 
@@ -746,16 +696,146 @@ TEST_F(InvalidMutationTest, InvalidHeaderAppendAction) {
   testResponse(response);
 }
 
+TEST_F(InvalidMutationTest, InvalidRequestHeadersSet) {
+  Filters::Common::ExtAuthz::Response response;
+  response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
+  response.headers_to_set = {{InvalidMutationTest::invalid_key_, "bar"}};
+  testResponse(response);
+  auto& filter_state = decoder_filter_callbacks_.streamInfo().filterState();
+  ASSERT_TRUE(filter_state->hasData<ExtAuthzLoggingInfo>(FilterConfigName));
+  auto actual = filter_state->getDataReadOnly<ExtAuthzLoggingInfo>(FilterConfigName);
+  EXPECT_EQ(actual->requestProcessingEffect(),
+            Filters::Common::ProcessingEffect::Effect::InvalidMutationRejected);
+}
+
+TEST_F(InvalidMutationTest, InvalidRequestHeadersAppend) {
+  Filters::Common::ExtAuthz::Response response;
+  response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
+  response.headers_to_append = {{InvalidMutationTest::invalid_key_, "bar"}};
+  testResponse(response);
+  auto& filter_state = decoder_filter_callbacks_.streamInfo().filterState();
+  ASSERT_TRUE(filter_state->hasData<ExtAuthzLoggingInfo>(FilterConfigName));
+  auto actual = filter_state->getDataReadOnly<ExtAuthzLoggingInfo>(FilterConfigName);
+  EXPECT_EQ(actual->requestProcessingEffect(),
+            Filters::Common::ProcessingEffect::Effect::InvalidMutationRejected);
+}
+
+TEST_F(InvalidMutationTest, InvalidRequestHeadersAdd) {
+  Filters::Common::ExtAuthz::Response response;
+  response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
+  response.headers_to_add = {{"foo", InvalidMutationTest::getInvalidValue()}};
+  testResponse(response);
+  auto& filter_state = decoder_filter_callbacks_.streamInfo().filterState();
+  ASSERT_TRUE(filter_state->hasData<ExtAuthzLoggingInfo>(FilterConfigName));
+  auto actual = filter_state->getDataReadOnly<ExtAuthzLoggingInfo>(FilterConfigName);
+  EXPECT_EQ(actual->requestProcessingEffect(),
+            Filters::Common::ProcessingEffect::Effect::InvalidMutationRejected);
+}
+
+TEST_F(InvalidMutationTest, InvalidRequestQueryParams) {
+  Filters::Common::ExtAuthz::Response response;
+  response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
+  response.query_parameters_to_set = {{"f o o", "bar"}};
+  testResponse(response);
+  auto& filter_state = decoder_filter_callbacks_.streamInfo().filterState();
+  ASSERT_TRUE(filter_state->hasData<ExtAuthzLoggingInfo>(FilterConfigName));
+  auto actual = filter_state->getDataReadOnly<ExtAuthzLoggingInfo>(FilterConfigName);
+  EXPECT_EQ(actual->requestProcessingEffect(),
+            Filters::Common::ProcessingEffect::Effect::InvalidMutationRejected);
+}
+
+TEST_F(HttpFilterTest, MutationAppliedEffect) {
+  InSequence s;
+
+  initialize(R"(
+      grpc_service:
+        envoy_grpc:
+          cluster_name: "ext_authz_server"
+      emit_filter_state_stats: true
+  )");
+
+  ON_CALL(decoder_filter_callbacks_, connection())
+      .WillByDefault(Return(OptRef<const Network::Connection>{connection_}));
+  connection_.stream_info_.downstream_connection_info_provider_->setRemoteAddress(addr_);
+  connection_.stream_info_.downstream_connection_info_provider_->setLocalAddress(addr_);
+  EXPECT_CALL(*client_, check(_, _, _, _))
+      .WillOnce(
+          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
+                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
+                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
+
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers_, false));
+
+  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding());
+
+  auto response = std::make_unique<Filters::Common::ExtAuthz::Response>();
+  response->status = Filters::Common::ExtAuthz::CheckStatus::OK;
+  response->headers_to_set = {{"foo", "bar"}};
+
+  request_callbacks_->onComplete(std::move(response));
+
+  auto& filter_state = decoder_filter_callbacks_.streamInfo().filterState();
+  ASSERT_TRUE(filter_state->hasData<ExtAuthzLoggingInfo>(FilterConfigName));
+  auto actual = filter_state->getDataReadOnly<ExtAuthzLoggingInfo>(FilterConfigName);
+  EXPECT_EQ(actual->requestProcessingEffect(),
+            Filters::Common::ProcessingEffect::Effect::MutationApplied);
+}
+
+TEST_F(HttpFilterTest, MutationRejectedSizeLimitExceededEffect) {
+  InSequence s;
+
+  initialize(R"(
+      grpc_service:
+        envoy_grpc:
+          cluster_name: "ext_authz_server"
+      emit_filter_state_stats: true
+  )");
+
+  // Use a local request_headers with small limits to trigger size limit rejection.
+  Http::TestRequestHeaderMapImpl request_headers({}, /*max_headers_kb=*/1,
+                                                 /*max_headers_count=*/9999);
+
+  ON_CALL(decoder_filter_callbacks_, connection())
+      .WillByDefault(Return(OptRef<const Network::Connection>{connection_}));
+  connection_.stream_info_.downstream_connection_info_provider_->setRemoteAddress(addr_);
+  connection_.stream_info_.downstream_connection_info_provider_->setLocalAddress(addr_);
+  EXPECT_CALL(*client_, check(_, _, _, _))
+      .WillOnce(
+          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
+                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
+                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
+
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers, false));
+
+  EXPECT_CALL(decoder_filter_callbacks_.stream_info_,
+              setResponseFlag(Envoy::StreamInfo::CoreResponseFlag::UnauthorizedExternalService));
+  EXPECT_CALL(decoder_filter_callbacks_, encodeHeaders_(_, true));
+
+  auto response = std::make_unique<Filters::Common::ExtAuthz::Response>();
+  response->status = Filters::Common::ExtAuthz::CheckStatus::OK;
+  // HCM default max header kb is 60. We set it to 1KB above, so 2KB should definitely exceed it.
+  response->headers_to_set = {{"foo", std::string(2048, 'a')}};
+
+  request_callbacks_->onComplete(std::move(response));
+
+  auto& filter_state = decoder_filter_callbacks_.streamInfo().filterState();
+  ASSERT_TRUE(filter_state->hasData<ExtAuthzLoggingInfo>(FilterConfigName));
+  auto actual = filter_state->getDataReadOnly<ExtAuthzLoggingInfo>(FilterConfigName);
+  EXPECT_EQ(actual->requestProcessingEffect(),
+            Filters::Common::ProcessingEffect::Effect::MutationRejectedSizeLimitExceeded);
+}
+
 struct DecoderHeaderMutationRulesTestOpts {
   absl::optional<envoy::config::common::mutation_rules::v3::HeaderMutationRules> rules;
   bool expect_reject_response = false;
-  // Key-value pairs for headers, will be converted to HeaderMutationVector with appropriate action.
-  std::vector<std::pair<std::string, std::string>> allowed_headers_to_add;
-  std::vector<std::pair<std::string, std::string>> disallowed_headers_to_add;
-  std::vector<std::pair<std::string, std::string>> allowed_headers_to_append;
-  std::vector<std::pair<std::string, std::string>> disallowed_headers_to_append;
-  std::vector<std::pair<std::string, std::string>> allowed_headers_to_set;
-  std::vector<std::pair<std::string, std::string>> disallowed_headers_to_set;
+  Filters::Common::ExtAuthz::UnsafeHeaderVector allowed_headers_to_add;
+  Filters::Common::ExtAuthz::UnsafeHeaderVector disallowed_headers_to_add;
+  Filters::Common::ExtAuthz::UnsafeHeaderVector allowed_headers_to_append;
+  Filters::Common::ExtAuthz::UnsafeHeaderVector disallowed_headers_to_append;
+  Filters::Common::ExtAuthz::UnsafeHeaderVector allowed_headers_to_set;
+  Filters::Common::ExtAuthz::UnsafeHeaderVector disallowed_headers_to_set;
   std::vector<absl::string_view> allowed_headers_to_remove;
   std::vector<absl::string_view> disallowed_headers_to_remove;
 };
@@ -858,19 +938,12 @@ public:
     }
 
     for (const auto& [key, value] : opts.allowed_headers_to_append) {
-      // APPEND_IF_EXISTS_OR_ADD uses addCopy() which creates duplicate entries.
-      // Check that both the original and appended values exist.
-      auto headers = request_headers_.get(Http::LowerCaseString(key));
-      ASSERT_EQ(headers.size(), 2) << "(key: '" << key << "')";
-      EXPECT_EQ(headers[0]->value().getStringView(), "will be appended to")
+      EXPECT_EQ(request_headers_.get_(Http::LowerCaseString(key)),
+                absl::StrCat("will be appended to,", value))
           << "(key: '" << key << "')";
-      EXPECT_EQ(headers[1]->value().getStringView(), value) << "(key: '" << key << "')";
     }
     for (const auto& [key, value] : opts.disallowed_headers_to_append) {
-      // Disallowed headers should not have the appended value.
-      auto headers = request_headers_.get(Http::LowerCaseString(key));
-      ASSERT_EQ(headers.size(), 1) << "(key: '" << key << "')";
-      EXPECT_EQ(headers[0]->value().getStringView(), "will not be appended to")
+      EXPECT_EQ(request_headers_.get_(Http::LowerCaseString(key)), "will not be appended to")
           << "(key: '" << key << "')";
     }
 
@@ -890,22 +963,19 @@ public:
 
     for (const auto& vec : {opts.allowed_headers_to_add, opts.disallowed_headers_to_add}) {
       for (const auto& [key, value] : vec) {
-        response.request_header_mutations.push_back(
-            {key, value, Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+        response.headers_to_add.emplace_back(key, value);
       }
     }
 
     for (const auto& vec : {opts.allowed_headers_to_set, opts.disallowed_headers_to_set}) {
       for (const auto& [key, value] : vec) {
-        response.request_header_mutations.push_back(
-            {key, value, Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+        response.headers_to_set.emplace_back(key, value);
       }
     }
 
     for (const auto& vec : {opts.allowed_headers_to_append, opts.disallowed_headers_to_append}) {
       for (const auto& [key, value] : vec) {
-        response.request_header_mutations.push_back(
-            {key, value, Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+        response.headers_to_append.emplace_back(key, value);
       }
     }
 
@@ -1281,6 +1351,7 @@ TEST_F(HttpFilterTest, ImmediateErrorOpen) {
       cluster_name: "ext_authz_server"
   failure_mode_allow: true
   failure_mode_allow_header_add: true
+  emit_filter_state_stats: true
   )EOF");
 
   ON_CALL(decoder_filter_callbacks_, connection())
@@ -1312,6 +1383,12 @@ TEST_F(HttpFilterTest, ImmediateErrorOpen) {
   EXPECT_EQ(1U, config_->stats().error_.value());
   EXPECT_EQ(1U, config_->stats().failure_mode_allowed_.value());
   EXPECT_EQ(request_headers_.get_("x-envoy-auth-failure-mode-allowed"), "true");
+
+  auto& filter_state = decoder_filter_callbacks_.streamInfo().filterState();
+  ASSERT_TRUE(filter_state->hasData<ExtAuthzLoggingInfo>(FilterConfigName));
+  auto logging_info = filter_state->getDataReadOnly<ExtAuthzLoggingInfo>(FilterConfigName);
+  ASSERT_NE(logging_info, nullptr);
+  EXPECT_TRUE(logging_info->failedOpen());
 }
 
 // Test error response with custom headers and body.
@@ -1351,13 +1428,8 @@ TEST_F(HttpFilterTest, ErrorResponseWithCustomAttributes) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
   response.status_code = Http::Code::InternalServerError;
   response.body = "{\"error\": \"auth service unavailable\"}";
-  // For error responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"x-error-code", "AUTH_SERVICE_ERROR",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-error-message", "Internal auth service error",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  response.headers_to_set.emplace_back("x-error-code", "AUTH_SERVICE_ERROR");
+  response.headers_to_set.emplace_back("x-error-message", "Internal auth service error");
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, config_->stats().error_.value());
   EXPECT_EQ("ext_authz_error", decoder_filter_callbacks_.details());
@@ -1394,10 +1466,7 @@ TEST_F(HttpFilterTest, ErrorResponseWithFailureModeAllow) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
   response.status_code = Http::Code::InternalServerError;
   response.body = "{\"error\": \"auth service unavailable\"}";
-  // For error responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"x-error-code", "AUTH_SERVICE_ERROR",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  response.headers_to_set.emplace_back("x-error-code", "AUTH_SERVICE_ERROR");
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, config_->stats().error_.value());
   EXPECT_EQ(1U, config_->stats().failure_mode_allowed_.value());
@@ -1440,10 +1509,8 @@ TEST_F(HttpFilterTest, ErrorResponseWithInvalidHeaders) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
   response.status_code = Http::Code::InternalServerError;
   response.body = "{\"error\": \"test\"}";
-  // Add an invalid header with newlines. For error responses, use local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"invalid\n\nheader", "value",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  // Add an invalid header with newlines.
+  response.headers_to_set.emplace_back("invalid\n\nheader", "value");
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, config_->stats().error_.value());
 }
@@ -1484,15 +1551,10 @@ TEST_F(HttpFilterTest, ErrorResponseWithInvalidHeadersInAppend) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
   response.status_code = Http::Code::ServiceUnavailable;
   response.body = "{\"error\": \"service error\"}";
-  // For error responses, use local_response_header_mutations.
-  // Add valid header.
-  response.local_response_header_mutations.push_back(
-      {"x-valid-header", "valid-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  // Add invalid header with newlines.
-  response.local_response_header_mutations.push_back(
-      {"x-bad\nheader", "value",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+  // Add valid header in headers_to_set.
+  response.headers_to_set.emplace_back("x-valid-header", "valid-value");
+  // Add invalid header with newlines in headers_to_append.
+  response.headers_to_append.emplace_back("x-bad\nheader", "value");
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, config_->stats().error_.value());
 }
@@ -1532,11 +1594,8 @@ TEST_F(HttpFilterTest, ErrorResponseWithInvalidHeaderValue) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
   response.status_code = Http::Code::InternalServerError;
   response.body = "{\"error\": \"test\"}";
-  // Add header with invalid value (contains NULL byte). For error responses, use
-  // local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"x-error-header", std::string("bad\0value", 9),
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+  // Add header with invalid value (contains NULL byte).
+  response.headers_to_append.emplace_back("x-error-header", std::string("bad\0value", 9));
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, config_->stats().error_.value());
 }
@@ -1581,11 +1640,8 @@ TEST_F(HttpFilterTest, ErrorResponseHeaderLimitsEnforced) {
   response.status_code = Http::Code::InternalServerError;
   response.body = "{\"error\": \"auth service error\"}";
   // Try to add many headers to test the limit enforcement.
-  // For error responses, use local_response_header_mutations.
   for (size_t i = 0; i < 200; ++i) {
-    response.local_response_header_mutations.push_back(
-        {fmt::format("x-error-header-{}", i), "value",
-         Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+    response.headers_to_set.emplace_back(fmt::format("x-error-header-{}", i), "value");
   }
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, config_->stats().error_.value());
@@ -1609,23 +1665,13 @@ TEST_F(HttpFilterTest, ErrorResponseHeaderLimitsEnforcedWithMock) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
   response.status_code = Http::Code::InternalServerError;
   response.body = "{\"error\": \"service error\"}";
-  // Add 5 headers to set. For error responses, use local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"x-error-1", "value1",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-error-2", "value2",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-error-3", "value3",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  // Add 5 headers to set.
+  response.headers_to_set.push_back({"x-error-1", "value1"});
+  response.headers_to_set.push_back({"x-error-2", "value2"});
+  response.headers_to_set.push_back({"x-error-3", "value3"});
   // Add 2 headers to append.
-  response.local_response_header_mutations.push_back(
-      {"x-append-1", "value1",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-append-2", "value2",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+  response.headers_to_append.push_back({"x-append-1", "value1"});
+  response.headers_to_append.push_back({"x-append-2", "value2"});
 
   prepareCheck();
 
@@ -1663,7 +1709,7 @@ TEST_F(HttpFilterTest, ErrorResponseHeaderLimitsEnforcedWithMock) {
   EXPECT_GT(config_->stats().omitted_response_headers_.value(), 0);
 }
 
-// Test that error response headers are limited when header count limit is hit.
+// Test that error response headers are limited in headers_to_append when the limit is hit.
 TEST_F(HttpFilterTest, ErrorResponseHeaderLimitsEnforcedInAppend) {
   InSequence s;
 
@@ -1679,16 +1725,12 @@ TEST_F(HttpFilterTest, ErrorResponseHeaderLimitsEnforcedInAppend) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
   response.status_code = Http::Code::ServiceUnavailable;
   response.body = "{\"error\": \"unavailable\"}";
-  // Add headers via Set (which adds new headers) to trigger the limit.
-  response.local_response_header_mutations.push_back(
-      {"x-error-1", "value1",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-error-2", "value2",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-error-3", "value3",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  // Add only 2 headers to set, so we have room to test append limit.
+  response.headers_to_set.push_back({"x-error-1", "value1"});
+  // Add many headers to append to trigger the limit in the append loop.
+  response.headers_to_append.push_back({"x-append-1", "value1"});
+  response.headers_to_append.push_back({"x-append-2", "value2"});
+  response.headers_to_append.push_back({"x-append-3", "value3"});
 
   prepareCheck();
 
@@ -1704,23 +1746,24 @@ TEST_F(HttpFilterTest, ErrorResponseHeaderLimitsEnforcedInAppend) {
           Invoke([&](Http::Code, absl::string_view,
                      std::function<void(Http::ResponseHeaderMap & headers)> modify_headers,
                      const absl::optional<Grpc::Status::GrpcStatus>, absl::string_view) -> void {
-            // Create a ResponseHeaderMap with max_headers_count=2 to trigger limit.
+            // Create a ResponseHeaderMap with max_headers_count=2 to trigger limit in append loop.
             Http::TestResponseHeaderMapImpl response_headers({}, 99999, /*max_headers_count=*/2);
             if (modify_headers) {
               modify_headers(response_headers);
             }
-            // With a limit of 2, we should have first 2 headers.
+            // With a limit of 2, we should have 1 from set + 1 from append.
             EXPECT_EQ(response_headers.size(), 2);
             EXPECT_TRUE(response_headers.has("x-error-1"));
-            EXPECT_TRUE(response_headers.has("x-error-2"));
+            EXPECT_TRUE(response_headers.has("x-append-1"));
             // The rest should be omitted due to the limit.
-            EXPECT_FALSE(response_headers.has("x-error-3"));
+            EXPECT_FALSE(response_headers.has("x-append-2"));
+            EXPECT_FALSE(response_headers.has("x-append-3"));
           }));
 
   EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
             filter_->decodeHeaders(request_headers_, true));
   EXPECT_EQ(1U, config_->stats().error_.value());
-  // Verify that omitted_response_headers_ stat was incremented.
+  // Verify that omitted_response_headers_ stat was incremented in the append loop.
   EXPECT_GT(config_->stats().omitted_response_headers_.value(), 0);
 }
 
@@ -1754,10 +1797,7 @@ TEST_F(HttpFilterTest, ErrorResponseBodySizeLimit) {
   response.status_code = Http::Code::InternalServerError;
   // Body is longer than 10 bytes, should be truncated.
   response.body = "This is a very long error message that exceeds the limit";
-  // For error responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"x-error-code", "ERROR",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  response.headers_to_set.emplace_back("x-error-code", "ERROR");
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, config_->stats().error_.value());
 }
@@ -1799,7 +1839,7 @@ TEST_F(HttpFilterTest, ErrorResponseEmptyAttributes) {
   EXPECT_EQ(1U, config_->stats().error_.value());
 }
 
-// Test error response with multiple header mutation types.
+// Test error response with headers_to_append.
 TEST_F(HttpFilterTest, ErrorResponseWithAppendHeaders) {
   InSequence s;
 
@@ -1826,24 +1866,20 @@ TEST_F(HttpFilterTest, ErrorResponseWithAppendHeaders) {
       .WillOnce(Invoke([&](const Http::ResponseHeaderMap& headers, bool) -> void {
         EXPECT_EQ(headers.getStatusValue(),
                   std::to_string(enumToInt(Http::Code::InternalServerError)));
-        // Verify both headers_to_set and headers_to_add are present.
+        // Verify both headers_to_set and headers_to_append are present.
         EXPECT_EQ(headers.get(Http::LowerCaseString("x-error-set"))[0]->value().getStringView(),
                   "set-value");
-        EXPECT_EQ(headers.get(Http::LowerCaseString("x-error-add"))[0]->value().getStringView(),
-                  "add-value");
+        EXPECT_EQ(headers.get(Http::LowerCaseString("x-error-append"))[0]->value().getStringView(),
+                  "append-value");
       }));
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
   response.status_code = Http::Code::InternalServerError;
   response.body = "{\"error\": \"auth service error\"}";
-  // Add headers with Set and Add actions for local reply.
-  response.local_response_header_mutations.push_back(
-      {"x-error-set", "set-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-error-add", "add-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+  // Add both set and append headers.
+  response.headers_to_set.emplace_back("x-error-set", "set-value");
+  response.headers_to_append.emplace_back("x-error-append", "append-value");
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, config_->stats().error_.value());
 }
@@ -2452,10 +2488,8 @@ TEST_F(HttpFilterTest, ClearCache) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("bar", "foo", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_append = {{"foo", "bar"}};
+  response.headers_to_set = {{"bar", "foo"}};
   response.headers_to_remove = std::vector<std::string>{"remove-me"};
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, decoder_filter_callbacks_.clusterInfo()
@@ -2499,8 +2533,7 @@ TEST_F(HttpFilterTest, ClearCacheRouteHeadersToAppendOnly) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
+  response.headers_to_append = {{"foo", "bar"}};
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, decoder_filter_callbacks_.clusterInfo()
                     ->statsScope()
@@ -2543,8 +2576,7 @@ TEST_F(HttpFilterTest, ClearCacheRouteHeadersToAddOnly) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_set = {{"foo", "bar"}};
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, decoder_filter_callbacks_.clusterInfo()
                     ->statsScope()
@@ -2765,10 +2797,7 @@ TEST_F(RequestHeaderLimitTest, HeadersToSetCount) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo2", "bar2", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_set = {{"foo", "bar"}, {"foo2", "bar2"}};
 
   runTest(request_headers, response);
 }
@@ -2784,10 +2813,7 @@ TEST_F(RequestHeaderLimitTest, HeadersToSetSize) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.request_header_mutations.push_back(createRequestHeaderMutation(
-      "foo2", std::string(9999, 'a'), HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_set = {{"foo", "bar"}, {"foo2", std::string(9999, 'a')}};
 
   runTest(request_headers, response);
 }
@@ -2805,8 +2831,7 @@ TEST_F(RequestHeaderLimitTest, HeadersToAppendSize) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(createRequestHeaderMutation(
-      "foo", std::string(9999, 'a'), HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
+  response.headers_to_append = {{"foo", std::string(9999, 'a')}};
 
   runTest(request_headers, response);
 }
@@ -2822,10 +2847,7 @@ TEST_F(RequestHeaderLimitTest, HeadersToAddCount) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo2", "bar2", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
+  response.headers_to_add = {{"foo", "bar"}, {"foo2", "bar2"}};
 
   runTest(request_headers, response);
 }
@@ -2841,8 +2863,7 @@ TEST_F(RequestHeaderLimitTest, HeadersToAddSize) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(createRequestHeaderMutation(
-      "foo2", std::string(9999, 'a'), HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
+  response.headers_to_add = {{"foo2", std::string(9999, 'a')}};
 
   runTest(request_headers, response);
 }
@@ -2880,8 +2901,7 @@ TEST_F(HttpFilterTest, DownstreamRequestFailsOnHeaderSizeLimit) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
   // A very large header that will cause the request headers to exceed their limit.
-  response.request_header_mutations.push_back(createRequestHeaderMutation(
-      "too-big", std::string(10 * 1024, 'a'), HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_set = {{"too-big", std::string(10 * 1024, 'a')}};
 
   // Now the test should fail, since we expect the downstream request to fail.
   EXPECT_CALL(decoder_filter_callbacks_.stream_info_,
@@ -2968,10 +2988,8 @@ TEST_F(HttpFilterTest, NoClearCacheRouteConfig) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("bar", "foo", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_append = {{"foo", "bar"}};
+  response.headers_to_set = {{"bar", "foo"}};
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
   EXPECT_EQ(1U, decoder_filter_callbacks_.clusterInfo()
                     ->statsScope()
@@ -2996,9 +3014,7 @@ TEST_F(HttpFilterTest, NoClearCacheRouteDeniedResponse) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
   response.status_code = Http::Code::Unauthorized;
-  // For denied responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"foo", "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  response.headers_to_set = {{"foo", "bar"}};
   auto response_ptr = std::make_unique<Filters::Common::ExtAuthz::Response>(response);
 
   EXPECT_CALL(*client_, check(_, _, testing::A<Tracing::Span&>(), _))
@@ -4101,9 +4117,7 @@ TEST_P(HttpFilterTestParam, ImmediateDeniedResponseWithHttpAttributes) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
   response.status_code = Http::Code::Unauthorized;
-  // For denied responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"foo", "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  response.headers_to_set = {{"foo", "bar"}};
   response.body = std::string{"baz"};
 
   auto response_ptr = std::make_unique<Filters::Common::ExtAuthz::Response>(response);
@@ -4150,21 +4164,14 @@ TEST_P(HttpFilterTestParam, ImmediateOkResponseWithHttpAttributes) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(createRequestHeaderMutation(
-      request_header_key.get(), "bar", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.request_header_mutations.push_back(createRequestHeaderMutation(
-      key_to_add.get(), "foo", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.request_header_mutations.push_back(createRequestHeaderMutation(
-      key_to_override.get(), "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_append = {{request_header_key.get(), "bar"}};
+  response.headers_to_set = {{key_to_add.get(), "foo"}, {key_to_override.get(), "bar"}};
   response.headers_to_remove = {key_to_remove.get()};
   // This cookie will be appended to the encoded headers.
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "set-cookie", "cookie2=gingerbread", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
+  response.response_headers_to_add = {{"set-cookie", "cookie2=gingerbread"}};
   // This "should-be-overridden" header value from the auth server will override the
   // "should-be-overridden" entry from the upstream server.
-  response.response_header_mutations.push_back(
-      createResponseHeaderMutation("should-be-overridden", "finally-set-by-auth-server",
-                                   HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.response_headers_to_set = {{"should-be-overridden", "finally-set-by-auth-server"}};
 
   auto response_ptr = std::make_unique<Filters::Common::ExtAuthz::Response>(response);
 
@@ -4179,11 +4186,7 @@ TEST_P(HttpFilterTestParam, ImmediateOkResponseWithHttpAttributes) {
   EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->decodeData(data_, false));
   EXPECT_EQ(Http::FilterTrailersStatus::Continue, filter_->decodeTrailers(request_trailers_));
   EXPECT_EQ(Http::FilterTrailersStatus::Continue, filter_->decodeTrailers(request_trailers_));
-  // APPEND_IF_EXISTS_OR_ADD uses addCopy() which creates duplicate entries.
-  auto baz_headers = request_headers_.get(request_header_key);
-  ASSERT_EQ(baz_headers.size(), 2);
-  EXPECT_EQ(baz_headers[0]->value().getStringView(), "foo");
-  EXPECT_EQ(baz_headers[1]->value().getStringView(), "bar");
+  EXPECT_EQ(request_headers_.get_(request_header_key), "foo,bar");
   EXPECT_EQ(request_headers_.get_(key_to_add), "foo");
   EXPECT_EQ(request_headers_.get_(key_to_override), "bar");
   EXPECT_EQ(request_headers_.has(key_to_remove), false);
@@ -4199,11 +4202,11 @@ TEST_P(HttpFilterTestParam, ImmediateOkResponseWithHttpAttributes) {
   EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_data, false));
   EXPECT_EQ(Http::FilterTrailersStatus::Continue, filter_->encodeTrailers(response_trailers));
   EXPECT_EQ(Http::FilterMetadataStatus::Continue, filter_->encodeMetadata(response_metadata));
-  // Response headers also use addCopy() for APPEND_IF_EXISTS_OR_ADD, creating duplicate entries.
-  auto set_cookie_headers = response_headers.get(Http::LowerCaseString{"set-cookie"});
-  ASSERT_EQ(set_cookie_headers.size(), 2);
-  EXPECT_EQ(set_cookie_headers[0]->value().getStringView(), "cookie1=snickerdoodle");
-  EXPECT_EQ(set_cookie_headers[1]->value().getStringView(), "cookie2=gingerbread");
+  EXPECT_EQ(Http::HeaderUtility::getAllOfHeaderAsString(response_headers,
+                                                        Http::LowerCaseString{"set-cookie"})
+                .result()
+                .value(),
+            "cookie1=snickerdoodle,cookie2=gingerbread");
   EXPECT_EQ(response_headers.get_("should-be-overridden"), "finally-set-by-auth-server");
 }
 
@@ -4214,10 +4217,9 @@ TEST_P(HttpFilterTestParam, OkWithResponseHeadersAndAppendActions) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "header-to-add-if-absent", "new-value", HeaderValueOption::ADD_IF_ABSENT));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "header-to-overwrite-if-exists", "new-value", HeaderValueOption::OVERWRITE_IF_EXISTS));
+  response.response_headers_to_add_if_absent = {{"header-to-add-if-absent", "new-value"}};
+  response.response_headers_to_overwrite_if_exists = {
+      {"header-to-overwrite-if-exists", "new-value"}};
 
   auto response_ptr = std::make_unique<Filters::Common::ExtAuthz::Response>(response);
 
@@ -4246,50 +4248,6 @@ TEST_P(HttpFilterTestParam, OkWithResponseHeadersAndAppendActions) {
   EXPECT_EQ(response_headers.get_("header-to-overwrite-if-exists"), "new-value");
 }
 
-// Covers Append action in encodeHeaders when the header exists and when it does not.
-TEST_P(HttpFilterTestParam, OkResponseHeadersAppendActionsAppendAndAdd) {
-  InSequence s;
-
-  prepareCheck();
-
-  Filters::Common::ExtAuthz::Response response{};
-  response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "append-existing", "appended", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "append-new", "added", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-
-  auto response_ptr = std::make_unique<Filters::Common::ExtAuthz::Response>(response);
-
-  EXPECT_CALL(*client_, check(_, _, _, _))
-      .WillOnce(Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
-                           const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
-                           const StreamInfo::StreamInfo&) -> void {
-        callbacks.onComplete(std::move(response_ptr));
-      }));
-  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding()).Times(0);
-  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers_, false));
-
-  Buffer::OwnedImpl response_data{};
-  Http::TestResponseHeaderMapImpl response_headers{{":status", "200"},
-                                                   {"append-existing", "initial"}};
-  Http::TestResponseTrailerMapImpl response_trailers{};
-  Http::MetadataMap response_metadata{};
-
-  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->encodeHeaders(response_headers, false));
-  EXPECT_EQ(Http::FilterDataStatus::Continue, filter_->encodeData(response_data, false));
-  EXPECT_EQ(Http::FilterTrailersStatus::Continue, filter_->encodeTrailers(response_trailers));
-  EXPECT_EQ(Http::FilterMetadataStatus::Continue, filter_->encodeMetadata(response_metadata));
-
-  // APPEND_IF_EXISTS_OR_ADD uses addCopy() which creates duplicate entries.
-  auto append_existing_headers = response_headers.get(Http::LowerCaseString{"append-existing"});
-  ASSERT_EQ(append_existing_headers.size(), 2);
-  EXPECT_EQ(append_existing_headers[0]->value().getStringView(), "initial");
-  EXPECT_EQ(append_existing_headers[1]->value().getStringView(), "appended");
-  // Append to non-existing should add the header.
-  EXPECT_EQ(response_headers.get_("append-new"), "added");
-}
-
 TEST_P(HttpFilterTestParam, OkWithResponseHeadersAndAppendActionsDoNotTakeEffect) {
   InSequence s;
 
@@ -4297,10 +4255,9 @@ TEST_P(HttpFilterTestParam, OkWithResponseHeadersAndAppendActionsDoNotTakeEffect
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "header-to-add-if-absent", "new-value", HeaderValueOption::ADD_IF_ABSENT));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "header-to-overwrite-if-exists", "new-value", HeaderValueOption::OVERWRITE_IF_EXISTS));
+  response.response_headers_to_add_if_absent = {{"header-to-add-if-absent", "new-value"}};
+  response.response_headers_to_overwrite_if_exists = {
+      {"header-to-overwrite-if-exists", "new-value"}};
 
   auto response_ptr = std::make_unique<Filters::Common::ExtAuthz::Response>(response);
 
@@ -4335,40 +4292,6 @@ TEST_P(HttpFilterTestParam, ImmediateOkResponseWithUnmodifiedQueryParameters) {
   const Http::Utility::QueryParamsVector add_me{};
   const std::vector<std::string> remove_me{"remove-me"};
   queryParameterTest(original_path, expected_path, add_me, remove_me);
-}
-
-// Validate that invalid header removals are ignored when validate_mutations is enabled.
-TEST_P(HttpFilterTestParam, OkIgnoresInvalidHeaderRemovalWhenValidated) {
-  InSequence s;
-
-  initialize(R"EOF(
-  grpc_service:
-    envoy_grpc:
-      cluster_name: "ext_authz_server"
-  validate_mutations: true
-  )EOF");
-
-  prepareCheck();
-
-  // Add a header that should remain because the removal key is invalid.
-  request_headers_.addCopy("keep-me", "yes");
-
-  Filters::Common::ExtAuthz::Response response{};
-  response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.headers_to_remove.push_back("invalid\nheader");
-
-  auto response_ptr = std::make_unique<Filters::Common::ExtAuthz::Response>(response);
-
-  EXPECT_CALL(*client_, check(_, _, _, _))
-      .WillOnce(Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
-                           const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
-                           const StreamInfo::StreamInfo&) -> void {
-        callbacks.onComplete(std::move(response_ptr));
-      }));
-  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding()).Times(0);
-
-  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers_, false));
-  EXPECT_EQ(request_headers_.get_("keep-me"), "yes");
 }
 
 TEST_P(HttpFilterTestParam, ImmediateOkResponseWithRepeatedUnmodifiedQueryParameters) {
@@ -4574,11 +4497,7 @@ TEST_P(HttpFilterTestParam, DestroyResponseBeforeSendLocalReply) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
   response.status_code = Http::Code::Forbidden;
   response.body = std::string{"foo"};
-  // For denied responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.local_response_header_mutations.push_back(
-      createRequestHeaderMutation("bar", "foo", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_set = {{"foo", "bar"}, {"bar", "foo"}};
   Filters::Common::ExtAuthz::ResponsePtr response_ptr =
       std::make_unique<Filters::Common::ExtAuthz::Response>(response);
 
@@ -4635,18 +4554,11 @@ TEST_P(HttpFilterTestParam, OverrideEncodingHeaders) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
   response.status_code = Http::Code::Forbidden;
   response.body = std::string{"foo"};
-  // For denied responses, headers go to local_response_header_mutations.
-  // Use Add action for set-cookie headers to allow multiple values.
-  response.local_response_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.local_response_header_mutations.push_back(
-      createRequestHeaderMutation("bar", "foo", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.local_response_header_mutations.push_back(createRequestHeaderMutation(
-      "set-cookie", "cookie1=value", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.local_response_header_mutations.push_back(createRequestHeaderMutation(
-      "set-cookie", "cookie2=value", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.local_response_header_mutations.push_back(createRequestHeaderMutation(
-      "accept-encoding", "gzip,deflate", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_set = {{"foo", "bar"},
+                             {"bar", "foo"},
+                             {"set-cookie", "cookie1=value"},
+                             {"set-cookie", "cookie2=value"},
+                             {"accept-encoding", "gzip,deflate"}};
   Filters::Common::ExtAuthz::ResponsePtr response_ptr =
       std::make_unique<Filters::Common::ExtAuthz::Response>(response);
 
@@ -4738,8 +4650,7 @@ TEST_F(HttpFilterTest, EmitDynamicMetadata) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_set = {{"foo", "bar"}};
   (*response.dynamic_metadata.mutable_fields())["ext_authz_duration"] = ext_authz_duration_value;
 
   initializeMetadata(response);
@@ -4784,8 +4695,7 @@ TEST_F(HttpFilterTest, EmitDynamicMetadataWhenDenied) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
   response.status_code = Http::Code::Unauthorized;
-  response.request_header_mutations.push_back(
-      createRequestHeaderMutation("foo", "bar", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_set = {{"foo", "bar"}};
 
   initializeMetadata(response);
 
@@ -4974,8 +4884,7 @@ TEST_P(HttpFilterTestParam, OnDestroyCancelsDefaultClient) {
 // Test that ext_authz filter is not in noop mode when cluster is not specified per route
 // (this could be the case when route is configured with redirect or direct response action).
 TEST_P(HttpFilterTestParam, NoCluster) {
-
-  ON_CALL(decoder_filter_callbacks_, clusterInfo()).WillByDefault(Return(nullptr));
+  decoder_filter_callbacks_.cluster_info_ = nullptr;
 
   // Place something in the context extensions on the route.
   envoy::extensions::filters::http::ext_authz::v3::ExtAuthzPerRoute settingsroute;
@@ -5093,7 +5002,7 @@ TEST_F(HttpFilterTest, NullRouteSkipsCheck) {
   prepareCheck();
 
   // Set up a null route return value.
-  ON_CALL(decoder_filter_callbacks_, route()).WillByDefault(Return(nullptr));
+  ON_CALL(decoder_filter_callbacks_, route()).WillByDefault(Return(OptRef<const Router::Route>()));
 
   // With null route, no authorization check should be performed.
   EXPECT_CALL(*client_, check(_, _, _, _)).Times(0);
@@ -6092,8 +6001,7 @@ TEST_F(HttpFilterTest, HttpClientPerRouteOverride) {
 TEST_F(InvalidMutationTest, InvalidResponseHeadersToAddName) {
   Filters::Common::ExtAuthz::Response r;
   r.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  r.response_header_mutations.push_back(createResponseHeaderMutation(
-      "invalid header name", "value", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
+  r.response_headers_to_add = {{"invalid header name", "value"}};
   testResponse(r);
 }
 
@@ -6101,8 +6009,7 @@ TEST_F(InvalidMutationTest, InvalidResponseHeadersToAddName) {
 TEST_F(InvalidMutationTest, InvalidResponseHeadersToAddValue) {
   Filters::Common::ExtAuthz::Response r;
   r.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  r.response_header_mutations.push_back(createResponseHeaderMutation(
-      "valid-name", getInvalidValue(), HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
+  r.response_headers_to_add = {{"valid-name", getInvalidValue()}};
   testResponse(r);
 }
 
@@ -6243,12 +6150,9 @@ public:
 TEST_F(ResponseHeaderLimitTest, EncodeHeadersToAddExceedsCountLimit) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(
-      {"key1", "value1", Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-  response.response_header_mutations.push_back(
-      {"key2", "value2", Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-  response.response_header_mutations.push_back(
-      {"key3", "value3", Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+  response.response_headers_to_add.push_back({"key1", "value1"});
+  response.response_headers_to_add.push_back({"key2", "value2"});
+  response.response_headers_to_add.push_back({"key3", "value3"});
 
   Http::TestResponseHeaderMapImpl response_headers(
       {{":status", "200"}, {"existing-header", "value"}}, /*max_headers_kb=*/99999,
@@ -6260,13 +6164,9 @@ TEST_F(ResponseHeaderLimitTest, EncodeHeadersToAddExceedsCountLimit) {
 TEST_F(ResponseHeaderLimitTest, EncodeHeadersToAddExceedsSizeLimit) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(
-      {"key1", "value1", Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-  response.response_header_mutations.push_back(
-      {"key2", "value2", Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-  response.response_header_mutations.push_back(
-      {"key3", std::string(9999, 'a'),
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
+  response.response_headers_to_add.push_back({"key1", "value1"});
+  response.response_headers_to_add.push_back({"key2", "value2"});
+  response.response_headers_to_add.push_back({"key3", std::string(9999, 'a')});
 
   Http::TestResponseHeaderMapImpl response_headers(
       {{":status", "200"}, {"existing-header", "value"}}, /*max_headers_kb=*/1,
@@ -6280,15 +6180,9 @@ TEST_F(ResponseHeaderLimitTest, EncodeHeadersToAddExceedsSizeLimit) {
 TEST_F(ResponseHeaderLimitTest, EncodeHeadersToSetExceedsCountLimit) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(
-      {"existing-header-to-overwrite", "new-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.response_header_mutations.push_back(
-      {"new-header-to-add", "value",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.response_header_mutations.push_back(
-      {"another-new-header", "value",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  response.response_headers_to_set.push_back({"existing-header-to-overwrite", "new-value"});
+  response.response_headers_to_set.push_back({"new-header-to-add", "value"});
+  response.response_headers_to_set.push_back({"another-new-header", "value"});
 
   Http::TestResponseHeaderMapImpl response_headers(
       {{":status", "200"}, {"existing-header-to-overwrite", "old-value"}}, /*max_headers_kb=*/99999,
@@ -6300,13 +6194,10 @@ TEST_F(ResponseHeaderLimitTest, EncodeHeadersToSetExceedsCountLimit) {
 TEST_F(ResponseHeaderLimitTest, EncodeHeadersToSetExceedsSizeLimit) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(
-      createResponseHeaderMutation("existing-header-to-overwrite", std::string(9999, 'a'),
-                                   HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "new-header-to-add", "value", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "another-new-header", "value", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.response_headers_to_set.push_back(
+      {"existing-header-to-overwrite", std::string(9999, 'a')});
+  response.response_headers_to_set.push_back({"new-header-to-add", "value"});
+  response.response_headers_to_set.push_back({"another-new-header", "value"});
 
   Http::TestResponseHeaderMapImpl response_headers(
       {{":status", "200"}, {"existing-header-to-overwrite", "old-value"}}, /*max_headers_kb=*/1,
@@ -6320,12 +6211,9 @@ TEST_F(ResponseHeaderLimitTest, EncodeHeadersToSetExceedsSizeLimit) {
 TEST_F(ResponseHeaderLimitTest, EncodeHeadersToAddIfAbsentExceedsCountLimit) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(
-      {"key1", "value1", Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
-  response.response_header_mutations.push_back(
-      {"key2", "value2", Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
-  response.response_header_mutations.push_back(
-      {"existing-header", "value", Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
+  response.response_headers_to_add_if_absent.push_back({"key1", "value1"});
+  response.response_headers_to_add_if_absent.push_back({"key2", "value2"});
+  response.response_headers_to_add_if_absent.push_back({"existing-header", "value"});
 
   Http::TestResponseHeaderMapImpl response_headers(
       {{":status", "200"}, {"existing-header", "value"}}, /*max_headers_kb=*/99999,
@@ -6337,8 +6225,7 @@ TEST_F(ResponseHeaderLimitTest, EncodeHeadersToAddIfAbsentExceedsCountLimit) {
 TEST_F(ResponseHeaderLimitTest, EncodeHeadersToAddIfAbsentExceedsSizeLimit) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(
-      {"foo", std::string(9999, 'a'), Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
+  response.response_headers_to_add_if_absent.push_back({"foo", std::string(9999, 'a')});
 
   Http::TestResponseHeaderMapImpl response_headers(
       {{":status", "200"}, {"existing-header", "value"}}, /*max_headers_kb=*/1,
@@ -6362,14 +6249,10 @@ TEST_F(HttpFilterTest, EncodeHeadersLimitDisabledByDefault) {
   // any one of these headers would be rejected on the basis of their size, they collectively would
   // be rejected due to the resulting header count.
   const std::string big_value(9999, 'a');
-  response.response_header_mutations.push_back(
-      createResponseHeaderMutation("add", big_value, HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "set", big_value, HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.response_header_mutations.push_back(
-      createResponseHeaderMutation("add-if-absent", big_value, HeaderValueOption::ADD_IF_ABSENT));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "overwrite-if-exists", big_value, HeaderValueOption::OVERWRITE_IF_EXISTS));
+  response.response_headers_to_add.push_back({"add", big_value});
+  response.response_headers_to_set.push_back({"set", big_value});
+  response.response_headers_to_add_if_absent.push_back({"add-if-absent", big_value});
+  response.response_headers_to_overwrite_if_exists.push_back({"overwrite-if-exists", big_value});
 
   prepareCheck();
 
@@ -6399,11 +6282,9 @@ TEST_F(HttpFilterTest, EncodeHeadersLimitDisabledByDefault) {
 TEST_F(ResponseHeaderLimitTest, EncodeHeadersToOverwriteIfExistsExceedsSizeLimit) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(
-      createResponseHeaderMutation("existing-header-to-overwrite", std::string(9999, 'a'),
-                                   HeaderValueOption::OVERWRITE_IF_EXISTS));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "non-existing-header", "value", HeaderValueOption::OVERWRITE_IF_EXISTS));
+  response.response_headers_to_overwrite_if_exists.push_back(
+      {"existing-header-to-overwrite", std::string(9999, 'a')});
+  response.response_headers_to_overwrite_if_exists.push_back({"non-existing-header", "value"});
 
   Http::TestResponseHeaderMapImpl response_headers({{":status", "200"},
                                                     {"existing-header", "value"},
@@ -6429,13 +6310,9 @@ TEST_F(HttpFilterTest, DeniedResponseLocalReplyExceedsLimit) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
   response.status_code = Http::Code::Unauthorized;
-  // For denied responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"key1", "value1", Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"key2", "value2", Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"key3", "value3", Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  response.headers_to_set.push_back({"key1", "value1"});
+  response.headers_to_set.push_back({"key2", "value2"});
+  response.headers_to_set.push_back({"key3", "value3"});
 
   prepareCheck();
 
@@ -6479,13 +6356,9 @@ TEST_F(HttpFilterTest, DeniedResponseLocalReplyExceedsLimitDisabled) {
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
   response.status_code = Http::Code::Unauthorized;
-  // For denied responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"key1", "value1", Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"key2", "value2", Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"key3", "value3", Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  response.headers_to_set.push_back({"key1", "value1"});
+  response.headers_to_set.push_back({"key2", "value2"});
+  response.headers_to_set.push_back({"key3", "value3"});
 
   prepareCheck();
 
@@ -6548,10 +6421,8 @@ TEST_F(HttpFilterTest, SetCookieHeaderOnSuccessfulAuthorization) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "set-cookie", "session=abc123", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "x-custom-header", "custom-value", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
+  response.response_headers_to_add = {{"set-cookie", "session=abc123"},
+                                      {"x-custom-header", "custom-value"}};
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
 
   EXPECT_EQ(1U, config_->stats().ok_.value());
@@ -6607,12 +6478,8 @@ TEST_F(HttpFilterTest, SetCookieHeaderOnDeniedAuthorization) {
   response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
   response.status_code = Http::Code::Forbidden;
   response.body = "Unauthorized";
-  // For denied responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(createRequestHeaderMutation(
-      "set-cookie", "error=invalid", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
-  response.local_response_header_mutations.push_back(
-      createRequestHeaderMutation("www-authenticate", "Bearer realm=\"example\"",
-                                  HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD));
+  response.headers_to_set = {{"set-cookie", "error=invalid"},
+                             {"www-authenticate", "Bearer realm=\"example\""}};
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
 
   EXPECT_EQ(1U, config_->stats().denied_.value());
@@ -6647,107 +6514,280 @@ TEST_F(HttpFilterTest, MultipleSetCookieHeadersOnSuccess) {
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "set-cookie", "session=abc123", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
-  response.response_header_mutations.push_back(createResponseHeaderMutation(
-      "set-cookie", "user=john", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD));
+  response.response_headers_to_add = {{"set-cookie", "session=abc123"},
+                                      {"set-cookie", "user=john"}};
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
 
   EXPECT_EQ(1U, config_->stats().ok_.value());
 }
 
-TEST_P(HttpFilterTestParam, RequestHeadersAppendActions) {
+// Shadow mode tests: when shadow_mode is enabled, the filter should never send a local reply.
+// Instead it writes the authorization decision into FilterState and continues.
+
+namespace {
+// The shadow filter state key is the filter's configured name with a ``.shadow`` suffix,
+// distinct from the ExtAuthzLoggingInfo key which uses the bare filter config name.
+constexpr absl::string_view kShadowFilterStateKey = "ext_authz_filter.shadow";
+} // namespace
+
+// Verify that in shadow mode a Denied response sets FilterState and continues (no local reply).
+TEST_F(HttpFilterTest, ShadowModeDeniedSetsFilterStateAndContinues) {
+  InSequence s;
+
+  initialize(R"EOF(
+  grpc_service:
+    envoy_grpc:
+      cluster_name: "ext_authz_server"
+  shadow_mode: true
+  )EOF");
+
   prepareCheck();
-  request_headers_.addCopy("append-if-exists-or-add", "initial");
-  request_headers_.addCopy("overwrite-if-exists", "initial");
-  request_headers_.addCopy("overwrite-if-exists-or-add", "initial");
 
   EXPECT_CALL(*client_, check(_, _, _, _))
-      .WillOnce(Invoke([](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
-                          const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
-                          const StreamInfo::StreamInfo&) -> void {
-        Filters::Common::ExtAuthz::Response response{};
-        response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
+      .WillOnce(
+          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
+                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
+                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
 
-        response.request_header_mutations.push_back(
-            {"append-if-exists-or-add", "added", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-        response.request_header_mutations.push_back(
-            {"new-header", "added", HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-        response.request_header_mutations.push_back(
-            {"add-if-absent", "added", HeaderValueOption::ADD_IF_ABSENT});
-        response.request_header_mutations.push_back(
-            {"append-if-exists-or-add", "ignored", HeaderValueOption::ADD_IF_ABSENT});
-        response.request_header_mutations.push_back(
-            {"overwrite-if-exists", "overwritten", HeaderValueOption::OVERWRITE_IF_EXISTS});
-        response.request_header_mutations.push_back(
-            {"new-header-2", "ignored", HeaderValueOption::OVERWRITE_IF_EXISTS});
-        response.request_header_mutations.push_back(
-            {"overwrite-if-exists-or-add", "overwritten",
-             HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-        response.request_header_mutations.push_back(
-            {"new-header-3", "set", HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers_, false));
 
-        callbacks.onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
-      }));
+  // The response flag should NOT be set in shadow mode.
+  EXPECT_CALL(decoder_filter_callbacks_.stream_info_,
+              setResponseFlag(Envoy::StreamInfo::CoreResponseFlag::UnauthorizedExternalService))
+      .Times(0);
 
+  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding());
+
+  Filters::Common::ExtAuthz::Response response{};
+  response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
+  response.status_code = Http::Code::Unauthorized;
+  response.body = "Access denied";
+  response.headers_to_set = {{"x-auth-reason", "unauthorized"}};
+  request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
+
+  const auto* shadow =
+      decoder_filter_callbacks_.streamInfo().filterState()->getDataReadOnly<ShadowDecisionObject>(
+          kShadowFilterStateKey);
+  ASSERT_NE(shadow, nullptr);
+  EXPECT_EQ(shadow->checkResult(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::DENIED);
+  EXPECT_EQ(shadow->statusCode(), Http::Code::Unauthorized);
+  ASSERT_EQ(shadow->responseHeaders().size(), 1);
+  EXPECT_EQ(shadow->responseHeaders()[0].first, "x-auth-reason");
+  EXPECT_EQ(shadow->responseHeaders()[0].second, "unauthorized");
+
+  // Exercise serializeAsProto (populates all non-empty branches) and serializeAsString.
+  auto serialized = shadow->serializeAsProto();
+  ASSERT_NE(serialized, nullptr);
+  const auto& proto =
+      dynamic_cast<const envoy::extensions::filters::http::ext_authz::v3::ShadowDecision&>(
+          *serialized);
+  EXPECT_EQ(proto.check_result(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::DENIED);
+  EXPECT_EQ(proto.status_code(), 401);
+  ASSERT_EQ(proto.response_headers().size(), 1);
+  EXPECT_EQ(proto.response_headers()[0].key(), "x-auth-reason");
+  EXPECT_EQ(proto.response_headers()[0].value(), "unauthorized");
+
+  // serializeAsString returns JSON — parse it back to a proto so the assertions are robust
+  // against MessageUtil JSON-option changes (whitespace, field ordering, etc.).
+  auto serialized_str = shadow->serializeAsString();
+  ASSERT_TRUE(serialized_str.has_value());
+  envoy::extensions::filters::http::ext_authz::v3::ShadowDecision decoded_from_json;
+  TestUtility::loadFromJson(*serialized_str, decoded_from_json);
+  EXPECT_EQ(decoded_from_json.check_result(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::DENIED);
+  EXPECT_EQ(decoded_from_json.status_code(), 401);
+  ASSERT_EQ(decoded_from_json.response_headers().size(), 1);
+  EXPECT_EQ(decoded_from_json.response_headers()[0].key(), "x-auth-reason");
+  EXPECT_EQ(decoded_from_json.response_headers()[0].value(), "unauthorized");
+
+  // Field-level access for access-log formatters and CEL.
+  EXPECT_TRUE(shadow->hasFieldSupport());
+  EXPECT_EQ(absl::get<absl::string_view>(shadow->getField("check_result")), "DENIED");
+  EXPECT_EQ(absl::get<int64_t>(shadow->getField("status_code")), 401);
+  // Unknown field returns monostate.
+  EXPECT_TRUE(absl::holds_alternative<absl::monostate>(shadow->getField("unknown")));
+
+  EXPECT_EQ(1U, config_->stats().shadow_denied_.value());
+  // In shadow mode, denied stats are still incremented (the decision was deny).
+  EXPECT_EQ(1U, config_->stats().denied_.value());
+  // Denied response headers should NOT be applied to the request (they are response-destined
+  // headers like WWW-Authenticate). They are available in FilterState instead.
+  EXPECT_EQ("", request_headers_.get_("x-auth-reason"));
+}
+
+// Verify that in shadow mode an Error response sets FilterState and continues (no local reply).
+TEST_F(HttpFilterTest, ShadowModeErrorSetsFilterStateAndContinues) {
+  InSequence s;
+
+  initialize(R"EOF(
+  grpc_service:
+    envoy_grpc:
+      cluster_name: "ext_authz_server"
+  shadow_mode: true
+  )EOF");
+
+  prepareCheck();
+
+  EXPECT_CALL(*client_, check(_, _, _, _))
+      .WillOnce(
+          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
+                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
+                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
+
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers_, false));
+
+  EXPECT_CALL(decoder_filter_callbacks_.stream_info_,
+              setResponseFlag(Envoy::StreamInfo::CoreResponseFlag::UnauthorizedExternalService))
+      .Times(0);
+
+  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding());
+
+  Filters::Common::ExtAuthz::Response response{};
+  response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
+  response.body = "auth service error";
+  request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
+
+  const auto* shadow =
+      decoder_filter_callbacks_.streamInfo().filterState()->getDataReadOnly<ShadowDecisionObject>(
+          kShadowFilterStateKey);
+  ASSERT_NE(shadow, nullptr);
+  EXPECT_EQ(shadow->checkResult(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::ERROR);
+  // Default status_on_error is 403.
+  EXPECT_EQ(shadow->statusCode(), Http::Code::Forbidden);
+
+  // getField exposes the ERROR enum name and the fallback status code.
+  EXPECT_EQ(absl::get<absl::string_view>(shadow->getField("check_result")), "ERROR");
+  EXPECT_EQ(absl::get<int64_t>(shadow->getField("status_code")), 403);
+
+  EXPECT_EQ(1U, config_->stats().shadow_error_.value());
+  // In shadow mode, error stats are still incremented (the auth service returned an error).
+  EXPECT_EQ(1U, config_->stats().error_.value());
+}
+
+// Verify that in shadow mode an OK response sets FilterState and continues as normal.
+TEST_F(HttpFilterTest, ShadowModeOkSetsFilterState) {
+  InSequence s;
+
+  initialize(R"EOF(
+  grpc_service:
+    envoy_grpc:
+      cluster_name: "ext_authz_server"
+  shadow_mode: true
+  )EOF");
+
+  prepareCheck();
+
+  EXPECT_CALL(*client_, check(_, _, _, _))
+      .WillOnce(
+          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
+                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
+                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
+
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers_, false));
+
+  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding());
+
+  Filters::Common::ExtAuthz::Response response{};
+  response.status = Filters::Common::ExtAuthz::CheckStatus::OK;
+  request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
+
+  const auto* shadow =
+      decoder_filter_callbacks_.streamInfo().filterState()->getDataReadOnly<ShadowDecisionObject>(
+          kShadowFilterStateKey);
+  ASSERT_NE(shadow, nullptr);
+  EXPECT_EQ(shadow->checkResult(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::OK);
+  // OK defaults to 200 so consumers see a populated status_code for every check_result.
+  EXPECT_EQ(shadow->statusCode(), Http::Code::OK);
+
+  // Exercise serializeAsProto on the OK branch.
+  auto serialized = shadow->serializeAsProto();
+  ASSERT_NE(serialized, nullptr);
+  const auto& proto =
+      dynamic_cast<const envoy::extensions::filters::http::ext_authz::v3::ShadowDecision&>(
+          *serialized);
+  EXPECT_EQ(proto.check_result(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::OK);
+  EXPECT_EQ(proto.status_code(), 200);
+  EXPECT_TRUE(proto.response_headers().empty());
+
+  EXPECT_EQ(absl::get<absl::string_view>(shadow->getField("check_result")), "OK");
+  EXPECT_EQ(absl::get<int64_t>(shadow->getField("status_code")), 200);
+
+  EXPECT_EQ(1U, config_->stats().ok_.value());
+  EXPECT_EQ(0U, config_->stats().shadow_denied_.value());
+  EXPECT_EQ(0U, config_->stats().shadow_error_.value());
+}
+
+// Verify that in shadow mode + deny_at_disable, the filter sets FilterState and continues
+// instead of sending a local reply.
+TEST_F(HttpFilterTest, ShadowModeDenyAtDisable) {
+  initialize(R"EOF(
+  grpc_service:
+    envoy_grpc:
+      cluster_name: "ext_authz_server"
+  shadow_mode: true
+  filter_enabled:
+    runtime_key: "http.ext_authz.enabled"
+    default_value:
+      numerator: 0
+      denominator: HUNDRED
+  deny_at_disable:
+    runtime_key: "http.ext_authz.deny_at_disable"
+    default_value:
+      value: true
+  )EOF");
+
+  ON_CALL(factory_context_.runtime_loader_.snapshot_,
+          featureEnabled("http.ext_authz.enabled",
+                         testing::Matcher<const envoy::type::v3::FractionalPercent&>(Percent(0))))
+      .WillByDefault(Return(false));
+
+  ON_CALL(factory_context_.runtime_loader_.snapshot_,
+          featureEnabled("http.ext_authz.enabled", false))
+      .WillByDefault(Return(true));
+
+  // Check should NOT be called since the filter is disabled.
+  EXPECT_CALL(*client_, check(_, _, _, _)).Times(0);
+
+  // Response flag SHOULD be set even in shadow mode, so the access log reflects what enforce
+  // mode would have logged.
+  EXPECT_CALL(decoder_filter_callbacks_.stream_info_,
+              setResponseFlag(Envoy::StreamInfo::CoreResponseFlag::UnauthorizedExternalService));
+
+  // Filter should continue, not stop.
   EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_->decodeHeaders(request_headers_, false));
 
-  // Check append-if-exists-or-add.
-  auto entries = request_headers_.get(Http::LowerCaseString("append-if-exists-or-add"));
-  EXPECT_EQ(2, entries.size());
-  EXPECT_EQ("initial", entries[0]->value().getStringView());
-  EXPECT_EQ("added", entries[1]->value().getStringView());
+  const auto* shadow =
+      decoder_filter_callbacks_.streamInfo().filterState()->getDataReadOnly<ShadowDecisionObject>(
+          kShadowFilterStateKey);
+  ASSERT_NE(shadow, nullptr);
+  EXPECT_EQ(shadow->checkResult(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::DENIED);
+  EXPECT_EQ(shadow->statusCode(), Http::Code::Forbidden);
 
-  // Check headers_to_add for "new-header".
-  entries = request_headers_.get(Http::LowerCaseString("new-header"));
-  EXPECT_EQ(1, entries.size());
-  EXPECT_EQ("added", entries[0]->value().getStringView());
-
-  // Check headers_to_add_if_absent for "add-if-absent".
-  entries = request_headers_.get(Http::LowerCaseString("add-if-absent"));
-  EXPECT_EQ(1, entries.size());
-  EXPECT_EQ("added", entries[0]->value().getStringView());
-
-  // Check headers_to_add_if_absent for "append-if-exists-or-add". It should be ignored.
-  entries = request_headers_.get(Http::LowerCaseString("append-if-exists-or-add"));
-  EXPECT_EQ(2, entries.size());
-
-  // Check headers_to_overwrite_if_exists for "overwrite-if-exists".
-  entries = request_headers_.get(Http::LowerCaseString("overwrite-if-exists"));
-  EXPECT_EQ(1, entries.size());
-  EXPECT_EQ("overwritten", entries[0]->value().getStringView());
-
-  // Check headers_to_overwrite_if_exists for "new-header-2". It should be ignored.
-  entries = request_headers_.get(Http::LowerCaseString("new-header-2"));
-  EXPECT_TRUE(entries.empty());
-
-  // Check headers_to_set for "overwrite-if-exists-or-add".
-  entries = request_headers_.get(Http::LowerCaseString("overwrite-if-exists-or-add"));
-  EXPECT_EQ(1, entries.size());
-  EXPECT_EQ("overwritten", entries[0]->value().getStringView());
-
-  // Check headers_to_set for "new-header-3".
-  entries = request_headers_.get(Http::LowerCaseString("new-header-3"));
-  EXPECT_EQ(1, entries.size());
-  EXPECT_EQ("set", entries[0]->value().getStringView());
-
-  EXPECT_EQ(1U, config_->stats().ok_.value());
+  EXPECT_EQ(1U, config_->stats().shadow_denied_.value());
+  EXPECT_EQ(1U, config_->stats().disabled_.value());
 }
 
-TEST_F(HttpFilterTest, ErrorResponseAddsHeadersToAdd) {
+// Verify that when shadow_mode is false (default), the filter sends local replies as before
+// and does NOT write the shadow decision to FilterState.
+TEST_F(HttpFilterTest, ShadowModeDisabledPreservesExistingBehaviour) {
   InSequence s;
 
   initialize(R"EOF(
   grpc_service:
     envoy_grpc:
       cluster_name: "ext_authz_server"
-  failure_mode_allow: false
   )EOF");
 
-  ON_CALL(decoder_filter_callbacks_, connection())
-      .WillByDefault(Return(OptRef<const Network::Connection>{connection_}));
-  connection_.stream_info_.downstream_connection_info_provider_->setRemoteAddress(addr_);
-  connection_.stream_info_.downstream_connection_info_provider_->setLocalAddress(addr_);
+  prepareCheck();
 
   EXPECT_CALL(*client_, check(_, _, _, _))
       .WillOnce(
@@ -6757,39 +6797,147 @@ TEST_F(HttpFilterTest, ErrorResponseAddsHeadersToAdd) {
 
   EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
             filter_->decodeHeaders(request_headers_, false));
+
+  EXPECT_CALL(decoder_filter_callbacks_.stream_info_,
+              setResponseFlag(Envoy::StreamInfo::CoreResponseFlag::UnauthorizedExternalService));
   EXPECT_CALL(decoder_filter_callbacks_, continueDecoding()).Times(0);
 
-  EXPECT_CALL(decoder_filter_callbacks_, encodeHeaders_(_, _))
-      .WillOnce(Invoke([&](const Http::ResponseHeaderMap& headers, bool) -> void {
-        EXPECT_EQ(headers.getStatusValue(), std::to_string(enumToInt(Http::Code::Forbidden)));
-        const auto added = headers.get(Http::LowerCaseString("x-error-added"));
-        ASSERT_FALSE(added.empty());
-        EXPECT_EQ(added[0]->value().getStringView(), "value");
-      }));
+  Filters::Common::ExtAuthz::Response response{};
+  response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
+  response.status_code = Http::Code::Forbidden;
+  request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
+
+  // Local reply should have been sent — denied counter should be incremented, not shadow_denied.
+  EXPECT_EQ(1U, config_->stats().denied_.value());
+  EXPECT_EQ(0U, config_->stats().shadow_denied_.value());
+  // FilterState should not contain a shadow decision when shadow_mode is disabled.
+  EXPECT_FALSE(decoder_filter_callbacks_.streamInfo().filterState()->hasData<ShadowDecisionObject>(
+      kShadowFilterStateKey));
+}
+
+// Verify that shadow mode works with the auth server's own dynamic_metadata alongside
+// the shadow FilterState decision — the two coexist on different storage paths.
+TEST_F(HttpFilterTest, ShadowModeDeniedWithAuthServerDynamicMetadata) {
+  InSequence s;
+
+  initialize(R"EOF(
+  grpc_service:
+    envoy_grpc:
+      cluster_name: "ext_authz_server"
+  shadow_mode: true
+  )EOF");
+
+  prepareCheck();
+
+  EXPECT_CALL(*client_, check(_, _, _, _))
+      .WillOnce(
+          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
+                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
+                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
+
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers_, false));
+
+  // The auth server's own dynamic_metadata is still emitted to dynamic metadata
+  // (this is existing behavior, independent of shadow mode).
+  EXPECT_CALL(decoder_filter_callbacks_.stream_info_, setDynamicMetadata(_, _))
+      .WillOnce(
+          Invoke([](const std::string& ns, const Protobuf::Struct& returned_dynamic_metadata) {
+            EXPECT_EQ(ns, "envoy.filters.http.ext_authz");
+            EXPECT_EQ(returned_dynamic_metadata.fields().at("custom_key").string_value(),
+                      "custom_value");
+          }));
+
+  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding());
+
+  Filters::Common::ExtAuthz::Response response{};
+  response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
+  response.status_code = Http::Code::Forbidden;
+  (*response.dynamic_metadata.mutable_fields())["custom_key"] =
+      ValueUtil::stringValue("custom_value");
+  request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
+
+  // Shadow decision is in FilterState, not dynamic metadata.
+  const auto* shadow =
+      decoder_filter_callbacks_.streamInfo().filterState()->getDataReadOnly<ShadowDecisionObject>(
+          kShadowFilterStateKey);
+  ASSERT_NE(shadow, nullptr);
+  EXPECT_EQ(shadow->checkResult(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::DENIED);
+
+  EXPECT_EQ(1U, config_->stats().shadow_denied_.value());
+}
+
+// Verify that shadow_mode combined with failure_mode_allow on an Error response still
+// continues the request and writes the ShadowDecision. Shadow mode short-circuits before
+// the failure_mode_allow branch, so the failure_mode_allowed_ counter is NOT incremented.
+TEST_F(HttpFilterTest, ShadowModeWithFailureModeAllowOnError) {
+  InSequence s;
+
+  initialize(R"EOF(
+  grpc_service:
+    envoy_grpc:
+      cluster_name: "ext_authz_server"
+  shadow_mode: true
+  failure_mode_allow: true
+  )EOF");
+
+  prepareCheck();
+
+  EXPECT_CALL(*client_, check(_, _, _, _))
+      .WillOnce(
+          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
+                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
+                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
+
+  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+            filter_->decodeHeaders(request_headers_, false));
+
+  // Neither the failure_mode_allow response flag nor setResponseFlag should fire in the
+  // Error+shadow path.
+  EXPECT_CALL(decoder_filter_callbacks_.stream_info_,
+              setResponseFlag(Envoy::StreamInfo::CoreResponseFlag::UnauthorizedExternalService))
+      .Times(0);
+  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding());
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
-  response.status_code = Http::Code::Forbidden;
-  // For error responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"x-error-added", "value",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
 
+  const auto* shadow =
+      decoder_filter_callbacks_.streamInfo().filterState()->getDataReadOnly<ShadowDecisionObject>(
+          kShadowFilterStateKey);
+  ASSERT_NE(shadow, nullptr);
+  EXPECT_EQ(shadow->checkResult(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::ERROR);
+  EXPECT_EQ(shadow->statusCode(), Http::Code::Forbidden);
+
+  EXPECT_EQ(1U, config_->stats().shadow_error_.value());
   EXPECT_EQ(1U, config_->stats().error_.value());
+  // Shadow mode short-circuits before the failure_mode_allow branch.
+  EXPECT_EQ(0U, config_->stats().failure_mode_allowed_.value());
 }
 
-TEST_F(HttpFilterTest, DeniedResponseAddsHeadersToAdd) {
+// Verify that shadow_mode combined with with_request_body buffers the body, dispatches the
+// auth check with the body included, and writes the ShadowDecision on Deny.
+TEST_F(HttpFilterTest, ShadowModeWithRequestBody) {
   InSequence s;
 
   initialize(R"EOF(
   grpc_service:
     envoy_grpc:
       cluster_name: "ext_authz_server"
+  shadow_mode: true
+  with_request_body:
+    max_request_bytes: 10
+    allow_partial_message: true
   )EOF");
 
   ON_CALL(decoder_filter_callbacks_, connection())
       .WillByDefault(Return(OptRef<const Network::Connection>{connection_}));
+  ON_CALL(decoder_filter_callbacks_, decodingBuffer()).WillByDefault(Return(&data_));
+  ON_CALL(decoder_filter_callbacks_, addDecodedData(_, _))
+      .WillByDefault(Invoke([&](Buffer::Instance& data, bool) { data_.add(data); }));
   connection_.stream_info_.downstream_connection_info_provider_->setRemoteAddress(addr_);
   connection_.stream_info_.downstream_connection_info_provider_->setLocalAddress(addr_);
 
@@ -6799,355 +6947,29 @@ TEST_F(HttpFilterTest, DeniedResponseAddsHeadersToAdd) {
                      const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
                      const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
 
-  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
+  EXPECT_EQ(Http::FilterHeadersStatus::StopIteration,
             filter_->decodeHeaders(request_headers_, false));
-  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding()).Times(0);
 
-  EXPECT_CALL(decoder_filter_callbacks_, encodeHeaders_(_, _))
-      .WillOnce(Invoke([&](const Http::ResponseHeaderMap& headers, bool) -> void {
-        EXPECT_EQ(headers.getStatusValue(), std::to_string(enumToInt(Http::Code::Forbidden)));
-        const auto added = headers.get(Http::LowerCaseString("x-denied-added"));
-        ASSERT_FALSE(added.empty());
-        EXPECT_EQ(added[0]->value().getStringView(), "value");
-      }));
+  // Feed enough body to trigger the auth call (max_request_bytes=10 with allow_partial_message).
+  Buffer::OwnedImpl body("0123456789");
+  EXPECT_EQ(Http::FilterDataStatus::StopIterationAndWatermark, filter_->decodeData(body, true));
+
+  // Auth server denies — shadow mode must continue without a local reply.
+  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding());
 
   Filters::Common::ExtAuthz::Response response{};
   response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
   response.status_code = Http::Code::Forbidden;
-  // For denied responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"x-denied-added", "value",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
   request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
 
-  EXPECT_EQ(1U, config_->stats().denied_.value());
-}
-
-TEST_F(HttpFilterTest, DeniedResponseInvalidHeadersToAddRejectedWithValidation) {
-  InSequence s;
-
-  initialize(R"EOF(
-  grpc_service:
-    envoy_grpc:
-      cluster_name: "ext_authz_server"
-  validate_mutations: true
-  )EOF");
-
-  ON_CALL(decoder_filter_callbacks_, connection())
-      .WillByDefault(Return(OptRef<const Network::Connection>{connection_}));
-  connection_.stream_info_.downstream_connection_info_provider_->setRemoteAddress(addr_);
-  connection_.stream_info_.downstream_connection_info_provider_->setLocalAddress(addr_);
-
-  EXPECT_CALL(*client_, check(_, _, _, _))
-      .WillOnce(
-          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
-                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
-                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
-
-  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
-            filter_->decodeHeaders(request_headers_, false));
-  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding()).Times(0);
-
-  // Invalid headers_to_add should cause a rejection.
-  EXPECT_CALL(decoder_filter_callbacks_, encodeHeaders_(_, _))
-      .WillOnce(Invoke([&](const Http::ResponseHeaderMap& headers, bool) -> void {
-        // Should get 500 Internal Server Error from rejection.
-        EXPECT_EQ(headers.getStatusValue(),
-                  std::to_string(enumToInt(Http::Code::InternalServerError)));
-      }));
-
-  Filters::Common::ExtAuthz::Response response{};
-  response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
-  response.status_code = Http::Code::Forbidden;
-  // For denied responses, headers go to local_response_header_mutations.
-  response.local_response_header_mutations.push_back(
-      {"invalid\nheader", "value",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-  request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
-
-  // Invalid stat should be incremented.
-  EXPECT_EQ(1U, config_->stats().invalid_.value());
-}
-
-// Tests that all append_action types are correctly applied to denied response headers.
-TEST_F(HttpFilterTest, DeniedResponseAppendActionsOnLocalReply) {
-  InSequence s;
-
-  initialize(R"EOF(
-  grpc_service:
-    envoy_grpc:
-      cluster_name: "ext_authz_server"
-  )EOF");
-
-  ON_CALL(decoder_filter_callbacks_, connection())
-      .WillByDefault(Return(OptRef<const Network::Connection>{connection_}));
-  connection_.stream_info_.downstream_connection_info_provider_->setRemoteAddress(addr_);
-  connection_.stream_info_.downstream_connection_info_provider_->setLocalAddress(addr_);
-
-  EXPECT_CALL(*client_, check(_, _, _, _))
-      .WillOnce(
-          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
-                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
-                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
-
-  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
-            filter_->decodeHeaders(request_headers_, false));
-  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding()).Times(0);
-
-  EXPECT_CALL(decoder_filter_callbacks_, encodeHeaders_(_, _))
-      .WillOnce(Invoke([&](Http::ResponseHeaderMap& headers, bool) -> void {
-        EXPECT_EQ(headers.getStatusValue(), std::to_string(enumToInt(Http::Code::Forbidden)));
-
-        // Set action should set header and replace existing.
-        auto set_header = headers.get(Http::LowerCaseString("x-set-header"));
-        ASSERT_EQ(set_header.size(), 1);
-        EXPECT_EQ(set_header[0]->value().getStringView(), "set-value");
-
-        // Add action should add header.
-        auto add_header = headers.get(Http::LowerCaseString("x-add-header"));
-        ASSERT_EQ(add_header.size(), 1);
-        EXPECT_EQ(add_header[0]->value().getStringView(), "add-value");
-
-        // Append action on non-existing header should add i.e. APPEND_IF_EXISTS_OR_ADD behavior.
-        auto append_new = headers.get(Http::LowerCaseString("x-append-new"));
-        ASSERT_EQ(append_new.size(), 1);
-        EXPECT_EQ(append_new[0]->value().getStringView(), "append-new-value");
-
-        // APPEND_IF_EXISTS_OR_ADD on existing header creates duplicate entries (addCopy).
-        // First Set creates "initial", then Add creates a second entry "appended".
-        auto append_existing = headers.get(Http::LowerCaseString("x-append-existing"));
-        ASSERT_EQ(append_existing.size(), 2);
-        EXPECT_EQ(append_existing[0]->value().getStringView(), "initial");
-        EXPECT_EQ(append_existing[1]->value().getStringView(), "appended");
-
-        // AddIfAbsent action on non-existing header should add.
-        auto add_if_absent_new = headers.get(Http::LowerCaseString("x-add-if-absent-new"));
-        ASSERT_EQ(add_if_absent_new.size(), 1);
-        EXPECT_EQ(add_if_absent_new[0]->value().getStringView(), "added");
-
-        // AddIfAbsent action on existing header should not add as header was set earlier.
-        auto add_if_absent_existing =
-            headers.get(Http::LowerCaseString("x-add-if-absent-existing"));
-        ASSERT_EQ(add_if_absent_existing.size(), 1);
-        EXPECT_EQ(add_if_absent_existing[0]->value().getStringView(), "original");
-
-        // OverwriteIfExists action on non-existing header should not add.
-        auto overwrite_non_existing =
-            headers.get(Http::LowerCaseString("x-overwrite-non-existing"));
-        EXPECT_TRUE(overwrite_non_existing.empty());
-
-        // OverwriteIfExists action on existing header should overwrite.
-        auto overwrite_existing = headers.get(Http::LowerCaseString("x-overwrite-existing"));
-        ASSERT_EQ(overwrite_existing.size(), 1);
-        EXPECT_EQ(overwrite_existing[0]->value().getStringView(), "overwritten");
-      }));
-
-  Filters::Common::ExtAuthz::Response response{};
-  response.status = Filters::Common::ExtAuthz::CheckStatus::Denied;
-  response.status_code = Http::Code::Forbidden;
-
-  // Set up mutations in order to test all action types.
-  // For denied responses, headers go to local_response_header_mutations.
-  // 1. Set action.
-  response.local_response_header_mutations.push_back(
-      {"x-set-header", "set-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-
-  // 2. Add action.
-  response.local_response_header_mutations.push_back(
-      {"x-add-header", "add-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-
-  // 3. Append action on non-existing header should add i.e. APPEND_IF_EXISTS_OR_ADD behavior.
-  response.local_response_header_mutations.push_back(
-      {"x-append-new", "append-new-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-
-  // 4. Set up a header, then append to it.
-  response.local_response_header_mutations.push_back(
-      {"x-append-existing", "initial",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-append-existing", "appended",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-
-  // 5. AddIfAbsent on non-existing header should add.
-  response.local_response_header_mutations.push_back(
-      {"x-add-if-absent-new", "added",
-       Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
-
-  // 6. Set up a header, then try AddIfAbsent should not add as header was set earlier.
-  response.local_response_header_mutations.push_back(
-      {"x-add-if-absent-existing", "original",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-add-if-absent-existing", "should-not-be-added",
-       Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
-
-  // 7. OverwriteIfExists on non-existing header should not add.
-  response.local_response_header_mutations.push_back(
-      {"x-overwrite-non-existing", "should-not-appear",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS});
-
-  // 8. Set up a header, then OverwriteIfExists should overwrite.
-  response.local_response_header_mutations.push_back(
-      {"x-overwrite-existing", "original",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-overwrite-existing", "overwritten",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS});
-
-  request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
-
-  EXPECT_EQ(1U, config_->stats().denied_.value());
-}
-
-// Tests that all append_action types are correctly applied to error response headers.
-TEST_F(HttpFilterTest, ErrorResponseAppendActionsOnLocalReply) {
-  InSequence s;
-
-  initialize(R"EOF(
-  grpc_service:
-    envoy_grpc:
-      cluster_name: "ext_authz_server"
-  failure_mode_allow: false
-  )EOF");
-
-  ON_CALL(decoder_filter_callbacks_, connection())
-      .WillByDefault(Return(OptRef<const Network::Connection>{connection_}));
-  connection_.stream_info_.downstream_connection_info_provider_->setRemoteAddress(addr_);
-  connection_.stream_info_.downstream_connection_info_provider_->setLocalAddress(addr_);
-
-  EXPECT_CALL(*client_, check(_, _, _, _))
-      .WillOnce(
-          Invoke([&](Filters::Common::ExtAuthz::RequestCallbacks& callbacks,
-                     const envoy::service::auth::v3::CheckRequest&, Tracing::Span&,
-                     const StreamInfo::StreamInfo&) -> void { request_callbacks_ = &callbacks; }));
-
-  EXPECT_EQ(Http::FilterHeadersStatus::StopAllIterationAndWatermark,
-            filter_->decodeHeaders(request_headers_, false));
-  EXPECT_CALL(decoder_filter_callbacks_, continueDecoding()).Times(0);
-
-  EXPECT_CALL(decoder_filter_callbacks_, encodeHeaders_(_, _))
-      .WillOnce(Invoke([&](Http::ResponseHeaderMap& headers, bool) -> void {
-        EXPECT_EQ(headers.getStatusValue(),
-                  std::to_string(enumToInt(Http::Code::ServiceUnavailable)));
-
-        // Set action should set header and replace existing.
-        auto set_header = headers.get(Http::LowerCaseString("x-error-set"));
-        ASSERT_EQ(set_header.size(), 1);
-        EXPECT_EQ(set_header[0]->value().getStringView(), "set-value");
-
-        // Add action should add header.
-        auto add_header = headers.get(Http::LowerCaseString("x-error-add"));
-        ASSERT_EQ(add_header.size(), 1);
-        EXPECT_EQ(add_header[0]->value().getStringView(), "add-value");
-
-        // Append action on non-existing header should add i.e. APPEND_IF_EXISTS_OR_ADD behavior.
-        auto append_new = headers.get(Http::LowerCaseString("x-error-append-new"));
-        ASSERT_EQ(append_new.size(), 1);
-        EXPECT_EQ(append_new[0]->value().getStringView(), "append-new-value");
-
-        // APPEND_IF_EXISTS_OR_ADD on existing header creates duplicate entries (addCopy).
-        auto append_existing = headers.get(Http::LowerCaseString("x-error-append-existing"));
-        ASSERT_EQ(append_existing.size(), 2);
-        EXPECT_EQ(append_existing[0]->value().getStringView(), "initial");
-        EXPECT_EQ(append_existing[1]->value().getStringView(), "appended");
-
-        // AddIfAbsent on non-existing header should add.
-        auto add_if_absent_new = headers.get(Http::LowerCaseString("x-error-add-if-absent-new"));
-        ASSERT_EQ(add_if_absent_new.size(), 1);
-        EXPECT_EQ(add_if_absent_new[0]->value().getStringView(), "added");
-
-        // AddIfAbsent on existing header should not add as header was set earlier.
-        auto add_if_absent_existing =
-            headers.get(Http::LowerCaseString("x-error-add-if-absent-existing"));
-        ASSERT_EQ(add_if_absent_existing.size(), 1);
-        EXPECT_EQ(add_if_absent_existing[0]->value().getStringView(), "original");
-
-        // OverwriteIfExists on non-existing header should not add.
-        auto overwrite_non_existing =
-            headers.get(Http::LowerCaseString("x-error-overwrite-non-existing"));
-        EXPECT_TRUE(overwrite_non_existing.empty());
-
-        // OverwriteIfExists on existing header should overwrite.
-        auto overwrite_existing = headers.get(Http::LowerCaseString("x-error-overwrite-existing"));
-        ASSERT_EQ(overwrite_existing.size(), 1);
-        EXPECT_EQ(overwrite_existing[0]->value().getStringView(), "overwritten");
-      }));
-
-  Filters::Common::ExtAuthz::Response response{};
-  response.status = Filters::Common::ExtAuthz::CheckStatus::Error;
-  response.status_code = Http::Code::ServiceUnavailable;
-
-  // Set up mutations in order to test all action types.
-  // For error responses, headers go to local_response_header_mutations.
-  // 1. Set action.
-  response.local_response_header_mutations.push_back(
-      {"x-error-set", "set-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-
-  // 2. Add action.
-  response.local_response_header_mutations.push_back(
-      {"x-error-add", "add-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-
-  // 3. Append action on non-existing header should add i.e. APPEND_IF_EXISTS_OR_ADD behavior.
-  response.local_response_header_mutations.push_back(
-      {"x-error-append-new", "append-new-value",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-
-  // 4. Set up a header, then append to it.
-  response.local_response_header_mutations.push_back(
-      {"x-error-append-existing", "initial",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-error-append-existing", "appended",
-       Filters::Common::ExtAuthz::HeaderValueOption::APPEND_IF_EXISTS_OR_ADD});
-
-  // 5. AddIfAbsent on non-existing header should add.
-  response.local_response_header_mutations.push_back(
-      {"x-error-add-if-absent-new", "added",
-       Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
-
-  // 6. Set up a header, then try AddIfAbsent should not add as header was set earlier.
-  response.local_response_header_mutations.push_back(
-      {"x-error-add-if-absent-existing", "original",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-error-add-if-absent-existing", "should-not-be-added",
-       Filters::Common::ExtAuthz::HeaderValueOption::ADD_IF_ABSENT});
-
-  // 7. OverwriteIfExists on non-existing header should not add.
-  response.local_response_header_mutations.push_back(
-      {"x-error-overwrite-non-existing", "should-not-appear",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS});
-
-  // 8. Set up a header, then OverwriteIfExists should overwrite.
-  response.local_response_header_mutations.push_back(
-      {"x-error-overwrite-existing", "original",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS_OR_ADD});
-  response.local_response_header_mutations.push_back(
-      {"x-error-overwrite-existing", "overwritten",
-       Filters::Common::ExtAuthz::HeaderValueOption::OVERWRITE_IF_EXISTS});
-
-  request_callbacks_->onComplete(std::make_unique<Filters::Common::ExtAuthz::Response>(response));
-
-  EXPECT_EQ(1U, config_->stats().error_.value());
-}
-
-// encode1xxHeaders should always continue without mutation.
-TEST_F(HttpFilterTest, Encode1xxHeadersContinue) {
-  initialize(R"EOF(
-  grpc_service:
-    envoy_grpc:
-      cluster_name: "ext_authz_server"
-  )EOF");
-
-  Http::TestResponseHeaderMapImpl headers{{":status", "103"}};
-  EXPECT_EQ(Http::Filter1xxHeadersStatus::Continue, filter_->encode1xxHeaders(headers));
-  // No mutations should have been applied.
-  EXPECT_EQ(headers.getStatusValue(), "103");
+  const auto* shadow =
+      decoder_filter_callbacks_.streamInfo().filterState()->getDataReadOnly<ShadowDecisionObject>(
+          kShadowFilterStateKey);
+  ASSERT_NE(shadow, nullptr);
+  EXPECT_EQ(shadow->checkResult(),
+            envoy::extensions::filters::http::ext_authz::v3::ShadowDecision::DENIED);
+  EXPECT_EQ(shadow->statusCode(), Http::Code::Forbidden);
+  EXPECT_EQ(1U, config_->stats().shadow_denied_.value());
 }
 
 } // namespace

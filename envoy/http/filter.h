@@ -364,7 +364,13 @@ public:
    * subsequent filters. We may want to persist callbacks so they always participate in later route
    * resolution or make it an independent entity like filters that gets called on route resolution.
    */
-  virtual Router::RouteConstSharedPtr route(const Router::RouteCallback& cb) PURE;
+  virtual OptRef<const Router::Route> route(const Router::RouteCallback& cb) PURE;
+
+  /**
+   * @return RouteConstSharedPtr the route for the current request, extended to allow a caller to
+   * extend or transfer ownership.
+   */
+  virtual Router::RouteConstSharedPtr routeSharedPtr(const Router::RouteCallback& cb) PURE;
 
   /**
    * Clears the route cache for the current request. This must be called when a filter has modified
@@ -425,7 +431,13 @@ public:
    * caching where applicable to avoid multiple lookups. If a filter has modified the headers in
    * a way that affects routing, clearRouteCache() must be called to clear the cache.
    */
-  virtual Router::RouteConstSharedPtr route() PURE;
+  virtual OptRef<const Router::Route> route() PURE;
+
+  /**
+   * @return RouteConstSharedPtr the route for the current request, extended to allow a caller to
+   * extend or transfer ownership.
+   */
+  virtual Router::RouteConstSharedPtr routeSharedPtr() PURE;
 
   /**
    * Returns the clusterInfo for the cached route.
@@ -433,7 +445,13 @@ public:
    * view of clusterInfo after a route is picked/repicked.
    * NOTE: Cached clusterInfo and route will be updated the same time.
    */
-  virtual Upstream::ClusterInfoConstSharedPtr clusterInfo() PURE;
+  virtual OptRef<const Upstream::ClusterInfo> clusterInfo() PURE;
+
+  /**
+   * @return ClusterInfoConstSharedPtr the cluster info for the cached route, extended to allow a
+   * caller to extend or transfer ownership.
+   */
+  virtual Upstream::ClusterInfoConstSharedPtr clusterInfoSharedPtr() PURE;
 
   /**
    * @return uint64_t the ID of the originating stream for logging purposes.
@@ -651,6 +669,9 @@ public:
    * status will be propagated directly to further filters in the filter chain. This is different
    * from addDecodedData() where data is added to the HTTP connection manager's buffered data with
    * the assumption that standard HTTP connection manager buffering and continuation are being used.
+   *
+   * @param data Buffer::Instance supplies the data to be injected.
+   * @param end_stream boolean supplies whether this is the last data frame, and no trailers behind.
    */
   virtual void injectDecodedDataToFilterChain(Buffer::Instance& data, bool end_stream) PURE;
 
@@ -831,10 +852,10 @@ public:
   virtual void setUpstreamOverrideHost(Upstream::LoadBalancerContext::OverrideHost) PURE;
 
   /**
-   * @return absl::optional<absl::string_view> optional override host for the upstream
-   * load balancing.
+   * @return OptRef<const Upstream::LoadBalancerContext::OverrideHost> optional override host
+   * for the upstream load balancing.
    */
-  virtual absl::optional<Upstream::LoadBalancerContext::OverrideHost>
+  virtual OptRef<const Upstream::LoadBalancerContext::OverrideHost>
   upstreamOverrideHost() const PURE;
 
   /**
@@ -1065,6 +1086,9 @@ public:
    * status will be propagated directly to further filters in the filter chain. This is different
    * from addEncodedData() where data is added to the HTTP connection manager's buffered data with
    * the assumption that standard HTTP connection manager buffering and continuation are being used.
+   *
+   * @param data Buffer::Instance supplies the data to be injected.
+   * @param end_stream boolean supplies whether this is the last data frame, and no trailers behind.
    */
   virtual void injectEncodedDataToFilterChain(Buffer::Instance& data, bool end_stream) PURE;
 

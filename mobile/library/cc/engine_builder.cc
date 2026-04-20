@@ -12,6 +12,7 @@
 #include "envoy/extensions/filters/http/dynamic_forward_proxy/v3/dynamic_forward_proxy.pb.h"
 #include "envoy/extensions/filters/http/router/v3/router.pb.h"
 #include "envoy/extensions/http/header_formatters/preserve_case/v3/preserve_case.pb.h"
+#include "envoy/extensions/early_data/v3/default_early_data_policy.pb.h"
 
 #if defined(__APPLE__)
 #include "envoy/extensions/network/dns_resolver/apple/v3/apple_dns_resolver.pb.h"
@@ -231,6 +232,11 @@ EngineBuilder& EngineBuilder::enableHttp3(bool http3_on) {
   return *this;
 }
 
+EngineBuilder& EngineBuilder::enableEarlyData(bool early_data_on) {
+  enable_early_data_ = early_data_on;
+  return *this;
+}
+
 EngineBuilder& EngineBuilder::addQuicConnectionOption(std::string option) {
   quic_connection_options_.push_back(std::move(option));
   return *this;
@@ -341,6 +347,13 @@ EngineBuilder& EngineBuilder::addNativeFilter(const std::string& name,
   native_filter_chain_.push_back(NativeFilterConfig(name, typed_config));
   return *this;
 }
+
+#if defined(__APPLE__)
+EngineBuilder& EngineBuilder::enableNetworkChangeMonitor(bool network_change_monitor_on) {
+  enable_network_change_monitor_ = network_change_monitor_on;
+  return *this;
+}
+#endif
 
 std::string EngineBuilder::nativeNameToConfig(absl::string_view name) {
 #ifdef ENVOY_ENABLE_FULL_PROTOS
@@ -571,6 +584,13 @@ std::unique_ptr<envoy::config::bootstrap::v3::Bootstrap> EngineBuilder::generate
   auto* backoff = route_to->mutable_retry_policy()->mutable_retry_back_off();
   backoff->mutable_base_interval()->set_nanos(250000000);
   backoff->mutable_max_interval()->set_seconds(60);
+
+  if (!enable_early_data_) {
+    auto* early_data = route_to->mutable_early_data_policy();
+    early_data->set_name("envoy.route.early_data_policy.default");
+    ::envoy::extensions::early_data::v3::DefaultEarlyDataPolicy config;
+    early_data->mutable_typed_config()->PackFrom(config);
+  }
 
   for (auto filter = native_filter_chain_.rbegin(); filter != native_filter_chain_.rend();
        ++filter) {
@@ -1160,6 +1180,10 @@ EngineSharedPtr EngineBuilder::build() {
   options->setLogLevel(static_cast<spdlog::level::level_enum>(log_level_));
   options->setConcurrency(1);
   envoy_engine->run(options);
+
+  if (enable_network_change_monitor_) {
+    engine->initializeNetworkChangeMonitor();
+  }
 
   // we can't construct via std::make_shared
   // because Engine is only constructible as a friend

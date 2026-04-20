@@ -549,6 +549,30 @@ Current supported substitution commands include:
   Upstream host name (e.g., DNS name) without port component. If no DNS name is available,
   the main address of the upstream host (e.g., ip for TCP connections) will be used.
 
+.. _config_access_log_format_upstream_hosts_attempted:
+
+``%UPSTREAM_HOSTS_ATTEMPTED%``
+  Comma-separated list of upstream host addresses (e.g., ip:port) that were attempted during the request,
+  including retries. This is useful for debugging retry behavior and understanding which hosts were tried
+  before a successful connection or final failure.
+
+.. _config_access_log_format_upstream_hosts_attempted_without_port:
+
+``%UPSTREAM_HOSTS_ATTEMPTED_WITHOUT_PORT%``
+  Same as ``%UPSTREAM_HOSTS_ATTEMPTED%`` but without port components.
+
+.. _config_access_log_format_upstream_host_names_attempted:
+
+``%UPSTREAM_HOST_NAMES_ATTEMPTED%``
+  Comma-separated list of upstream host names (e.g., DNS names) that were attempted during the request,
+  including retries. If no DNS name is available for a host, its main address (e.g., ip:port) will be used.
+  This is useful for debugging retry behavior with human-readable host names.
+
+.. _config_access_log_format_upstream_host_names_attempted_without_port:
+
+``%UPSTREAM_HOST_NAMES_ATTEMPTED_WITHOUT_PORT%``
+  Same as ``%UPSTREAM_HOST_NAMES_ATTEMPTED%`` but without port components.
+
 ``%UPSTREAM_CLUSTER%``
   Upstream cluster to which the upstream host belongs to. :ref:`alt_stat_name
   <envoy_v3_api_field_config.cluster.v3.Cluster.alt_stat_name>` will be used if provided.
@@ -627,6 +651,15 @@ Current supported substitution commands include:
 ``%UPSTREAM_DETECTED_CLOSE_TYPE%``
     The detected close type of the upstream connection. This is only available on access logs recorded after the connection has been closed.
     Possible values are ``Normal``, ``LocalReset``, and ``RemoteReset``.
+
+.. _config_access_log_format_upstream_local_close_reason:
+
+``%UPSTREAM_LOCAL_CLOSE_REASON%``
+  HTTP/TCP
+    If upstream connection was closed locally, provides the reason.
+
+  UDP
+    Not implemented ("-")
 
 .. _config_access_log_format_downstream_transport_failure_reason:
 
@@ -857,6 +890,12 @@ Current supported substitution commands include:
   cross-reference timer-based reports for the same connection. The identifier
   is unique with high likelihood within an execution, but can duplicate across
   multiple instances or between restarts.
+
+.. _config_access_log_format_upstream_connection_ids_attempted:
+
+``%UPSTREAM_CONNECTION_IDS_ATTEMPTED%``
+  Comma-separated list of upstream connection IDs that were attempted during the request, including retries.
+  This is useful for cross-referencing with other logs to understand connection reuse and retry behavior.
 
 .. _config_access_log_format_stream_id:
 
@@ -1307,6 +1346,24 @@ Current supported substitution commands include:
   UDP
     Not implemented. It will appear as ``"-"`` in the access logs.
 
+``%DOWNSTREAM_PEER_ISSUER_FINGERPRINT_256%``
+  HTTP/TCP/THRIFT
+    The hex-encoded SHA256 fingerprint of the verified issuer (CA) certificate from the
+    validated downstream TLS peer certificate. Requires a validated peer certificate chain
+    (e.g., mTLS with ``require_client_certificate: true`` and a ``validation_context``). Returns
+    ``"-"`` if there is no validated peer certificate chain or no issuer certificate can be found.
+  UDP
+    Not implemented. It will appear as ``"-"`` in the access logs.
+
+``%DOWNSTREAM_PEER_ISSUER_SERIAL%``
+  HTTP/TCP/THRIFT
+    The serial number of the verified issuer (CA) certificate from the validated downstream TLS
+    peer certificate. Requires a validated peer certificate chain (e.g., mTLS with
+    ``require_client_certificate: true`` and a ``validation_context``). Returns ``"-"`` if there
+    is no validated peer certificate chain or no issuer certificate can be found.
+  UDP
+    Not implemented. It will appear as ``"-"`` in the access logs.
+
 ``%DOWNSTREAM_PEER_CERT%``
   HTTP/TCP/THRIFT
     The client certificate in the URL-encoded PEM format used to establish the downstream TLS connection.
@@ -1507,10 +1564,33 @@ Current supported substitution commands include:
   TCP/UDP
     Not implemented. It will appear as ``"-"`` in the access logs.
 
+``%SPAN_ID%``
+  HTTP
+    The span ID of the active (downstream) span for the request. If the request does not have a span ID,
+    this will be an empty string. Note that span ID availability depends on the tracing provider; not all
+    providers implement span ID retrieval.
+  TCP/UDP
+    Not implemented. It will appear as ``"-"`` in the access logs.
+
 ``%QUERY_PARAM(X):Z%``
   HTTP
     The value of the query parameter ``X``. If the query parameter ``X`` is not present, ``"-"`` symbol will be used.
     ``Z`` is an optional parameter denoting string truncation up to ``Z`` characters long.
+  TCP/UDP
+    Not implemented. It will appear as ``"-"`` in the access logs.
+
+``%QUERY_PARAMS(X):Z%``
+  HTTP
+    All of the query parameters. The parameter ``X`` is used to specify how the query parameters are presented
+    and is optional, with ``ORIG`` then being the default.
+
+    The ``X`` parameter can be:
+
+    * ``ORIG``: The output will be original query params string part of the path with no treatment.
+    * ``DECODED``: The query params will be URL decoded.
+
+    ``Z`` is an optional parameter denoting string truncation up to ``Z`` characters long.
+
   TCP/UDP
     Not implemented. It will appear as ``"-"`` in the access logs.
 
@@ -1694,3 +1774,41 @@ Current supported substitution commands include:
 
   TCP/UDP
     Not implemented. It will appear as ``"-"`` in the access logs.
+
+``%FILE_CONTENT(X:Y):Z%``
+  Evaluates to the content of the file at path ``X``. The file is reloaded whenever it changes.
+
+  Optionally specify a directory ``Y`` to watch, and reload the file when changes occur. See
+  :ref:`watched_directory <envoy_v3_api_field_config.core.v3.DataSource.watched_directory>`
+  for more detailed semantics.
+
+  Takes an optional parameter ``Z`` to denote the maximum string length after which the
+  string is truncated.
+
+  This formatter is an extension, which must be explictly configured with:
+
+  .. validated-code-block:: yaml
+    :type-name: envoy.config.core.v3.TypedExtensionConfig
+
+    name: envoy.formatter.file_content
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.formatter.file_content.v3.FileContent
+
+``%SECRET(X):Z%``
+  Evaluates to a secret value ``X`` in the configuration for this formatter, with an optional
+  maximum length ``Z`` after which the data is truncated. The format string ``%SECRET(my-api-token)%``
+  could we used with the following formatter extension configuration:
+
+  .. validated-code-block:: yaml
+    :type-name: envoy.config.core.v3.TypedExtensionConfig
+
+    name: envoy.formatter.generic_secret
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.formatter.generic_secret.v3.GenericSecret
+      secret_configs:
+        my-api-token:
+          name: bearer-token
+          sds_config:
+            ads: {}
+
+  This formatter is an extension and must be explicitly configured.

@@ -175,10 +175,12 @@ public:
   bool readDisable(bool disable) override;
   void encodeData(Buffer::Instance& data, bool end_stream) override;
   void addBytesSentCallback(Network::Connection::BytesSentCb cb) override;
-  Tcp::ConnectionPool::ConnectionData* onDownstreamEvent(Network::ConnectionEvent event) override;
+  Tcp::ConnectionPool::ConnectionData* onDownstreamEvent(Network::ConnectionEvent event,
+                                                         absl::string_view details = "") override;
   bool startUpstreamSecureTransport() override;
   Ssl::ConnectionInfoConstSharedPtr getUpstreamConnectionSslInfo() override;
   StreamInfo::DetectedCloseType detectedCloseType() const override;
+  absl::string_view localCloseReason() const override;
 
 private:
   Tcp::ConnectionPool::ConnectionDataPtr upstream_conn_data_;
@@ -203,7 +205,8 @@ public:
   bool readDisable(bool disable) override;
   void encodeData(Buffer::Instance& data, bool end_stream) override;
   void addBytesSentCallback(Network::Connection::BytesSentCb cb) override;
-  Tcp::ConnectionPool::ConnectionData* onDownstreamEvent(Network::ConnectionEvent event) override;
+  Tcp::ConnectionPool::ConnectionData* onDownstreamEvent(Network::ConnectionEvent event,
+                                                         absl::string_view details = "") override;
   // HTTP upstream must not implement converting upstream transport
   // socket from non-secure to secure mode.
   bool startUpstreamSecureTransport() override { return false; }
@@ -230,6 +233,7 @@ protected:
   // The downstream info that is owned by the downstream connection.
   StreamInfo::StreamInfo& downstream_info_;
   std::unique_ptr<Http::RequestHeaderMapImpl> downstream_headers_;
+  StreamInfo::DetectedCloseType detected_close_type_{StreamInfo::DetectedCloseType::Normal};
 
 private:
   class DecoderShim : public Http::ResponseDecoderImplBase {
@@ -293,7 +297,8 @@ public:
   void setRouterUpstreamRequest(UpstreamRequestPtr);
   void newStream(GenericConnectionPoolCallbacks& callbacks);
   void encodeData(Buffer::Instance& data, bool end_stream) override;
-  Tcp::ConnectionPool::ConnectionData* onDownstreamEvent(Network::ConnectionEvent event) override;
+  Tcp::ConnectionPool::ConnectionData* onDownstreamEvent(Network::ConnectionEvent event,
+                                                         absl::string_view details = "") override;
   bool isValidResponse(const Http::ResponseHeaderMap&);
   bool readDisable(bool disable) override;
   void setConnPoolCallbacks(std::unique_ptr<HttpConnPool::Callbacks>&& callbacks) {
@@ -328,7 +333,7 @@ public:
   void disableRouteTimeoutForWebsocketUpgrade() override {}
   Http::StreamDecoderFilterCallbacks* callbacks() override { return &decoder_filter_callbacks_; }
   Upstream::ClusterInfoConstSharedPtr cluster() override {
-    return decoder_filter_callbacks_.clusterInfo();
+    return decoder_filter_callbacks_.clusterInfoSharedPtr();
   }
   Router::FilterConfig& config() override {
     return const_cast<Router::FilterConfig&>(config_.routerFilterConfig());
