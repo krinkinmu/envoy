@@ -6568,9 +6568,9 @@ TEST_F(HostHttpClusterInfoTest, NoHostHttpOptions) {
   // Without ep-specific options, httpProtocolOptions(host) should return the cluster default.
   EXPECT_EQ(
       100,
-      cluster->info()->httpProtocolOptions(host).http2Options().max_concurrent_streams().value());
+      cluster->info()->httpProtocolOptions(*host).http2Options().max_concurrent_streams().value());
   // maxRequestsPerConnection(host) should return the cluster value.
-  EXPECT_EQ(500, cluster->info()->maxRequestsPerConnection(host));
+  EXPECT_EQ(500, cluster->info()->maxRequestsPerConnection(*host));
 }
 
 // Test that host-specific max_concurrent_streams is applied when metadata matches.
@@ -6591,7 +6591,7 @@ TEST_F(HostHttpClusterInfoTest, HostHttpMaxConcurrentStreamsApplied) {
   auto host = makeHostWithMetadata(cluster->info(), "envoy.lb", "endpoint_type", "high_throughput");
   EXPECT_EQ(
       500,
-      cluster->info()->httpProtocolOptions(host).http2Options().max_concurrent_streams().value());
+      cluster->info()->httpProtocolOptions(*host).http2Options().max_concurrent_streams().value());
 }
 
 // Test that cluster default is used when metadata doesn't match.
@@ -6612,7 +6612,7 @@ TEST_F(HostHttpClusterInfoTest, ClusterDefaultWhenMetadataDoesNotMatch) {
   auto host = makeHostWithMetadata(cluster->info(), "envoy.lb", "endpoint_type", "standard");
   EXPECT_EQ(
       100,
-      cluster->info()->httpProtocolOptions(host).http2Options().max_concurrent_streams().value());
+      cluster->info()->httpProtocolOptions(*host).http2Options().max_concurrent_streams().value());
 }
 
 // Test that cluster default is used when host has no metadata.
@@ -6633,7 +6633,7 @@ TEST_F(HostHttpClusterInfoTest, ClusterDefaultWhenNoHostMetadata) {
   auto host = makeTestHost(cluster->info(), "tcp://10.0.0.1:443", 1);
   EXPECT_EQ(
       100,
-      cluster->info()->httpProtocolOptions(host).http2Options().max_concurrent_streams().value());
+      cluster->info()->httpProtocolOptions(*host).http2Options().max_concurrent_streams().value());
 }
 
 // Test that first matching option is used when multiple options are configured.
@@ -6664,7 +6664,7 @@ TEST_F(HostHttpClusterInfoTest, FirstMatchingOptionIsUsed) {
   // Should use the first matching option (200), not the second (500).
   EXPECT_EQ(
       200,
-      cluster->info()->httpProtocolOptions(host).http2Options().max_concurrent_streams().value());
+      cluster->info()->httpProtocolOptions(*host).http2Options().max_concurrent_streams().value());
 }
 
 // Test host-specific max_requests_per_connection overrides cluster setting when metadata matches.
@@ -6685,7 +6685,7 @@ TEST_F(HostHttpClusterInfoTest, HostHttpMaxRequestsPerConnectionApplied) {
       100, 1000);
 
   auto host = makeHostWithMetadata(cluster->info(), "envoy.lb", "tier", "premium");
-  EXPECT_EQ(5000, cluster->info()->maxRequestsPerConnection(host));
+  EXPECT_EQ(5000, cluster->info()->maxRequestsPerConnection(*host));
 }
 
 // Test that cluster default max_requests_per_connection is used when metadata doesn't match.
@@ -6706,7 +6706,7 @@ TEST_F(HostHttpClusterInfoTest, ClusterDefaultMaxRequestsWhenMetadataDoesNotMatc
       100, 1000);
 
   auto host = makeHostWithMetadata(cluster->info(), "envoy.lb", "tier", "standard");
-  EXPECT_EQ(1000, cluster->info()->maxRequestsPerConnection(host));
+  EXPECT_EQ(1000, cluster->info()->maxRequestsPerConnection(*host));
 }
 
 // Test multiple hosts with different metadata match to different options.
@@ -6735,14 +6735,14 @@ TEST_F(HostHttpClusterInfoTest, DifferentHostsMatchDifferentOptions) {
 
   auto low_host = makeHostWithMetadata(cluster->info(), "envoy.lb", "capacity", "low");
   EXPECT_EQ(50, cluster->info()
-                    ->httpProtocolOptions(low_host)
+                    ->httpProtocolOptions(*low_host)
                     .http2Options()
                     .max_concurrent_streams()
                     .value());
 
   auto high_host = makeHostWithMetadata(cluster->info(), "envoy.lb", "capacity", "high");
   EXPECT_EQ(500, cluster->info()
-                     ->httpProtocolOptions(high_host)
+                     ->httpProtocolOptions(*high_host)
                      .http2Options()
                      .max_concurrent_streams()
                      .value());
@@ -6750,7 +6750,7 @@ TEST_F(HostHttpClusterInfoTest, DifferentHostsMatchDifferentOptions) {
   // Unmatched host uses cluster default.
   auto medium_host = makeHostWithMetadata(cluster->info(), "envoy.lb", "capacity", "medium");
   EXPECT_EQ(100, cluster->info()
-                     ->httpProtocolOptions(medium_host)
+                     ->httpProtocolOptions(*medium_host)
                      .http2Options()
                      .max_concurrent_streams()
                      .value());
@@ -6783,19 +6783,19 @@ TEST_F(HostHttpClusterInfoTest, DifferentHostsDifferentMaxRequests) {
       100, 1000);
 
   auto low_host = makeHostWithMetadata(cluster->info(), "envoy.lb", "limit", "low");
-  EXPECT_EQ(100, cluster->info()->maxRequestsPerConnection(low_host));
+  EXPECT_EQ(100, cluster->info()->maxRequestsPerConnection(*low_host));
 
   auto high_host = makeHostWithMetadata(cluster->info(), "envoy.lb", "limit", "high");
-  EXPECT_EQ(10000, cluster->info()->maxRequestsPerConnection(high_host));
+  EXPECT_EQ(10000, cluster->info()->maxRequestsPerConnection(*high_host));
 
   // Unmatched host uses cluster default.
   auto medium_host = makeHostWithMetadata(cluster->info(), "envoy.lb", "limit", "medium");
-  EXPECT_EQ(1000, cluster->info()->maxRequestsPerConnection(medium_host));
+  EXPECT_EQ(1000, cluster->info()->maxRequestsPerConnection(*medium_host));
 }
 
 // Test that maxRequestsPerConnection(host) uses DEFAULT_MAX_STREAMS when cluster value is 0.
 TEST_F(HostHttpClusterInfoTest, MaxRequestsDefaultsToDefaultMaxStreamsWhenZero) {
-  auto cluster = makeClusterWithEpSpecificOptions(
+  auto cluster = makeClusterWithHostHttpOptions(
       R"EOF(
         host_options:
           - http_protocol_options:
@@ -6812,11 +6812,11 @@ TEST_F(HostHttpClusterInfoTest, MaxRequestsDefaultsToDefaultMaxStreamsWhenZero) 
 
   // Unmatched host: cluster max_requests_per_connection is 0, so DEFAULT_MAX_STREAMS (1 << 29).
   auto host = makeHostWithMetadata(cluster->info(), "envoy.lb", "tier", "standard");
-  EXPECT_EQ(1U << 29, cluster->info()->maxRequestsPerConnection(host));
+  EXPECT_EQ(1U << 29, cluster->info()->maxRequestsPerConnection(*host));
 
   // Matched host: host-specific value overrides.
   auto premium_host = makeHostWithMetadata(cluster->info(), "envoy.lb", "tier", "premium");
-  EXPECT_EQ(5000, cluster->info()->maxRequestsPerConnection(premium_host));
+  EXPECT_EQ(5000, cluster->info()->maxRequestsPerConnection(*premium_host));
 }
 
 } // namespace

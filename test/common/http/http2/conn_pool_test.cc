@@ -3,7 +3,6 @@
 #include <vector>
 
 #include "source/common/event/dispatcher_impl.h"
-#include "source/common/http/conn_pool_base.h"
 #include "source/common/http/http2/conn_pool.h"
 #include "source/common/network/raw_buffer_socket.h"
 #include "source/common/network/utility.h"
@@ -16,13 +15,11 @@
 #include "test/mocks/http/mocks.h"
 #include "test/mocks/network/mocks.h"
 #include "test/mocks/runtime/mocks.h"
-#include "test/mocks/server/instance.h"
 #include "test/mocks/server/overload_manager.h"
 #include "test/mocks/upstream/cluster_info.h"
 #include "test/mocks/upstream/transport_socket_match.h"
 #include "test/test_common/printers.h"
 #include "test/test_common/test_runtime.h"
-#include "test/test_common/utility.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
